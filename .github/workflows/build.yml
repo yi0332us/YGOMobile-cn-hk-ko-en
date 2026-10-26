@@ -117,35 +117,15 @@ jobs:
       - name: 打包 APK（只打 cn 版 debug）
         run: ./gradlew :mobile:assembleCnDebug --stacktrace -Dorg.gradle.jvmargs="-Xmx4096m"
 
-      - name: 診斷 APK 位置（唔會令 workflow 失敗）
-        continue-on-error: true
-        run: |
-          echo "=== 1. 全機近 90 分鐘內新產生嘅 apk/aab/ap_ 檔 ==="
-          sudo find / -xdev -type f \( -name "*.apk" -o -name "*.aab" -o -name "*.ap_" \) -mmin -90 \
-            -printf '%s %p\n' 2>/dev/null | sort -n | tail -30
-          echo "=== 2. 所有名叫 outputs 嘅目錄 ==="
-          find / -xdev -type d -name outputs -path "*build*" 2>/dev/null | head -20
-          echo "=== 3. mobile 模組 build 目錄頂層 ==="
-          ls -la mobile/build 2>/dev/null || echo "mobile/build 唔存在"
-          ls -R mobile/build/outputs 2>/dev/null | head -60
-          echo "=== 4. intermediates/apk 內容 ==="
-          find / -xdev -path "*intermediates/apk*" -type f 2>/dev/null | head -20
-          echo "=== 5. gradle 設定入面同輸出位置有關嘅行 ==="
-          grep -rn -E "buildDir|layout\.buildDirectory|outputFileName|archivesBaseName|destinationDir|\.apk" \
-            --include=*.gradle --include=*.kts --include=gradle.properties . 2>/dev/null | head -40
-
-      - name: 收集 APK
+      - name: 收集 APK（副檔名係 .Apk，要唔分大細楷）
         run: |
           mkdir -p dist
-          echo "=== 全部 APK（大小 路徑）==="
-          find "$GITHUB_WORKSPACE" "$HOME" /tmp -xdev -type f -name "*.apk" \
-            -not -path "*/dist/*" -not -path "*/.gradle/caches/*" -printf '%s %p\n' 2>/dev/null | sort -n
-          find "$GITHUB_WORKSPACE" "$HOME" /tmp -xdev -type f -name "*.apk" \
-            -not -path "*/dist/*" -not -path "*/.gradle/caches/*" \
-            -not -iname "*androidTest*" -not -iname "*unaligned*" \
-            -size +1M -exec cp -v {} dist/ \; 2>/dev/null || true
+          find mobile/build/outputs/apk -type f -iname "*.apk" | while read -r f; do
+            base=$(basename "${f%.*}")
+            cp -v "$f" "dist/${base}.apk"
+          done
           ls -lh dist/
-          ls dist/*.apk > /dev/null 2>&1 || { echo "::error::搵唔到 APK，睇上一步診斷輸出"; exit 1; }
+          ls dist/*.apk > /dev/null 2>&1 || { echo "::error::搵唔到 APK"; exit 1; }
 
       - name: 上載 APK
         uses: actions/upload-artifact@v4
