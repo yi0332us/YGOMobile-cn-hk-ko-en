@@ -10,6 +10,24 @@ jobs:
       - name: 檢出專案原始碼
         uses: actions/checkout@v4
 
+      - name: 掃描簡體字來源（診斷，唔影響建置）
+        continue-on-error: true
+        run: |
+          echo "=== A. 含菜單簡體字嘅檔案（本地联机/编辑卡组/种类）==="
+          grep -rIl --exclude-dir=.git -e "本地联机" -e "编辑卡组" -e "种类" . | head -30
+          echo "=== B. 所有 .conf / .ini 檔 ==="
+          find . -type f \( -name "*.conf" -o -name "*.ini" \) -not -path "./.git/*" -printf '%s %p\n'
+          echo "=== C. res 語言資料夾 ==="
+          ls -d mobile/src/main/res/values* 2>/dev/null
+          echo "=== D. assets 結構（3 層）==="
+          find mobile/assets -maxdepth 3 2>/dev/null | head -60
+          echo "=== E. Constants.java 內嘅網址 ==="
+          grep -n -E "http|DEFAULT_GAME_DIR|ygocore" mobile/src/main/java/cn/garymb/ygomobile/Constants.java | head -50
+          echo "=== F. 同公告/更新有關嘅 java 檔 ==="
+          grep -rIl --include=*.java -i -E "notice|announce|公告" mobile/src | head -20
+          echo "=== G. 資源檔入面有簡體字嘅 xml（取樣 20 個）==="
+          grep -rIl --include=*.xml -P "[\x{4E00}-\x{9FFF}]" mobile/src/main/res | head -20
+
       - name: 配置 Python 環境
         uses: actions/setup-python@v5
         with:
