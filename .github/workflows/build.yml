@@ -80,11 +80,12 @@ jobs:
       - name: 繁中化卡庫與系統提示
         run: |
           python - << 'PYEOF'
-          import os, re, sqlite3, opencc
+          import os, re, shutil, sqlite3, opencc
           import xml.etree.ElementTree as ET
 
           cc = opencc.OpenCC('s2twp.json')
 
+          # 1. 繁中化 cards.cdb
           cdb_path = 'mobile/assets/data/cards.cdb'
           conn = sqlite3.connect(cdb_path)
           c = conn.cursor()
@@ -98,13 +99,45 @@ jobs:
           conn.close()
           print('cards.cdb 完成', len(rows))
 
+          # 2. 繁中化 strings.conf（同步輸出至 data/ 與 data/conf/）
           conf_path = 'mobile/assets/data/strings.conf'
           with open(conf_path, 'r', encoding='utf-8', errors='ignore') as f:
               text = f.read()
+          converted_conf = cc.convert(text)
           with open(conf_path, 'w', encoding='utf-8') as f:
-              f.write(cc.convert(text))
-          print('strings.conf 完成')
+              f.write(converted_conf)
+          os.makedirs('mobile/assets/data/conf', exist_ok=True)
+          with open('mobile/assets/data/conf/strings.conf', 'w', encoding='utf-8') as f:
+              f.write(converted_conf)
+          print('strings.conf 完成（已同步至 data/ 及 data/conf/）')
 
+          # 3. 繁中化伺服器清單 serverlist.xml
+          for s_path in ['mobile/src/main/assets/serverlist.xml', 'mobile/assets/serverlist.xml', 'mobile/src/main/assets/server_list.xml']:
+              if os.path.exists(s_path):
+                  with open(s_path, 'r', encoding='utf-8', errors='ignore') as f:
+                      s_text = f.read()
+                  converted_s = cc.convert(s_text)
+                  ET.fromstring(converted_s.encode('utf-8'))
+                  with open(s_path, 'w', encoding='utf-8') as f:
+                      f.write(converted_s)
+                  print(f'{s_path} 伺服器列表完成')
+
+          # 4. 繁中化 assets 內說明文檔（隱私政策、更新日誌等）
+          for root, dirs, files in os.walk('mobile'):
+              if 'assets' in root and 'build' not in root:
+                  for file in files:
+                      if file.endswith(('.txt', '.html', '.md', '.json')) and not file.endswith(('output-metadata.json', 'version.txt')):
+                          fpath = os.path.join(root, file)
+                          try:
+                              with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
+                                  content = f.read()
+                              with open(fpath, 'w', encoding='utf-8') as f:
+                                  f.write(cc.convert(content))
+                              print(f'文本資源完成: {fpath}')
+                          except Exception:
+                              pass
+
+          # 5. 繁中化 strings.xml
           xml_path = 'mobile/src/main/res/values/strings.xml'
           if os.path.exists(xml_path):
               with open(xml_path, 'r', encoding='utf-8') as f:
@@ -115,6 +148,7 @@ jobs:
                   f.write(out)
               print('strings.xml 完成（XML 驗證通過）')
           PYEOF
+
 
       - name: 配置 Java (JDK 17)
         uses: actions/setup-java@v4
