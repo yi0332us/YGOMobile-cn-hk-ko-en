@@ -5,7 +5,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: 檢出專案原始碼
         uses: actions/checkout@v4
@@ -117,8 +117,21 @@ jobs:
       - name: 打包 APK（只打 cn 版 debug）
         run: ./gradlew :mobile:assembleCnDebug --stacktrace -Dorg.gradle.jvmargs="-Xmx4096m"
 
+      - name: 搵出並收集 APK
+        run: |
+          mkdir -p dist
+          echo "=== 全部 APK（大小 路徑）==="
+          find . -type f -name "*.apk" -not -path "./dist/*" -printf '%s %p\n' | sort -n
+          echo "=== 收集（排除測試包同 unaligned，要求 >1MB）==="
+          find . -type f -name "*.apk" -not -path "./dist/*" \
+            -not -iname "*androidTest*" -not -iname "*unaligned*" \
+            -size +1M -exec cp -v {} dist/ \;
+          ls -lh dist/
+          ls dist/*.apk > /dev/null 2>&1 || { echo "::error::成個專案搵唔到 APK"; exit 1; }
+
       - name: 上載 APK
         uses: actions/upload-artifact@v4
         with:
           name: YGOMobile-TC
-          path: mobile/build/outputs/apk/**/*.apk
+          path: dist/*.apk
+          if-no-files-found: error
