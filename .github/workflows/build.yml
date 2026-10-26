@@ -1,7 +1,7 @@
 name: Build YGOMobile TC
 
 on:
-  workflow_dispatch: # 支援在 GitHub 網頁上手動點擊一鍵執行
+  workflow_dispatch:
 
 jobs:
   build:
@@ -18,39 +18,47 @@ jobs:
       - name: 安裝簡繁轉換工具 OpenCC
         run: pip install opencc
 
-      - name: 下載官方最新資源與字型
+      - name: 下載編譯必備組件與資源 (Windbot/字型/卡庫/腳本)
         run: |
+          mkdir -p mobile/libs
           mkdir -p mobile/assets/data/fonts
           
-          # 1. 抓取官方最新卡庫 (cards.cdb)
-          echo "正在下載官方最新 cards.cdb..."
+          # 1. 下載專案必備的 libWindbot.aar
+          echo "正在下載 libWindbot.aar..."
+          curl -L -o mobile/libs/libWindbot.aar https://github.com/fallenstardust/YGOMobile-cn-ko-en/releases/download/sounds/libWindbot.aar || \
+          curl -L -o mobile/libs/libWindbot.aar https://github.com/mercury233/libWindbot/releases/download/v1.0.3/libWindbot.aar
+
+          # 2. 建立卡圖包 pics.zip 佔位檔
+          zip -q mobile/assets/data/pics.zip .gitignore
+
+          # 3. 抓取官方最新卡庫 (cards.cdb)
+          echo "正在下載最新 cards.cdb..."
           curl -L -o mobile/assets/data/cards.cdb https://github.com/mycard/ygopro-database/raw/master/locales/zh-CN/cards.cdb
           
-          # 2. 抓取官方系統提示字 (strings.conf)
-          echo "正在下載官方最新 strings.conf..."
+          # 4. 抓取官方系統提示字 (strings.conf)
+          echo "正在下載最新 strings.conf..."
           curl -L -o mobile/assets/data/strings.conf https://github.com/mycard/ygopro-database/raw/master/locales/zh-CN/strings.conf
 
-          # 3. 抓取字型檔 (ygo.ttf)
+          # 5. 抓取字型檔 (ygo.ttf)
           echo "正在下載遊戲字型..."
           curl -L -o mobile/assets/data/fonts/ygo.ttf https://github.com/fallenstardust/YGOMobile-cn-ko-en/releases/download/sounds/ygo.ttf
 
-          # 4. 抓取最新卡片腳本並壓縮為 scripts.zip
-          echo "正在打包卡片腳本 scripts.zip..."
+          # 6. 打包卡片腳本 (scripts.zip)
+          echo "正在下載並打包 scripts.zip..."
           curl -L -o scripts_master.zip https://github.com/mycard/ygopro-scripts/archive/refs/heads/master.zip
           unzip -q scripts_master.zip
           mv ygopro-scripts-master script
           zip -rq mobile/assets/data/scripts.zip script
           rm -rf script scripts_master.zip
 
-      - name: 自動將卡庫、系統提示與 App 介面轉為繁體中文
+      - name: 繁中化卡庫與系統提示（安全保留 XML 格式）
         run: |
           python - << 'EOF'
-          import os, sqlite3, opencc
+          import os, re, sqlite3, opencc
 
-          # 使用台灣習慣繁體詞彙 (s2twp)，若習慣香港詞彙可換 s2hk.json
           cc = opencc.OpenCC('s2twp.json')
 
-          # 1. 轉換卡庫 cards.cdb
+          # 1. 繁中化 cards.cdb
           cdb_path = 'mobile/assets/data/cards.cdb'
           if os.path.exists(cdb_path):
               conn = sqlite3.connect(cdb_path)
@@ -72,7 +80,7 @@ jobs:
               conn.close()
               print(f'cards.cdb 繁中化完成，共處理 {len(rows)} 張卡片')
 
-          # 2. 轉換遊戲內提示 strings.conf
+          # 2. 繁中化 strings.conf
           conf_path = 'mobile/assets/data/strings.conf'
           if os.path.exists(conf_path):
               with open(conf_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -81,14 +89,18 @@ jobs:
                   f.write(cc.convert(text))
               print('strings.conf 繁中化完成')
 
-          # 3. 轉換 App 原生介面 strings.xml
+          # 3. 安全繁中化 strings.xml (僅替換標籤文字內容，保留標籤名與屬性)
           xml_path = 'mobile/src/main/res/values/strings.xml'
           if os.path.exists(xml_path):
               with open(xml_path, 'r', encoding='utf-8', errors='ignore') as f:
                   text = f.read()
+              # 正則只轉換 > 與 < 之間的文本
+              def convert_tag(match):
+                  return '>' + cc.convert(match.group(1)) + '<'
+              converted_xml = re.sub(r'>([^<]+)<', convert_tag, text)
               with open(xml_path, 'w', encoding='utf-8') as f:
-                  f.write(cc.convert(text))
-              print('App 原生介面 strings.xml 繁中化完成')
+                  f.write(converted_xml)
+              print('strings.xml 安全繁中化完成')
           EOF
 
       - name: 配置 Java (JDK 17)
@@ -108,7 +120,7 @@ jobs:
           ./gradlew :libcore:buildYgoCore
 
       - name: 打包繁中版 APK
-        run: ./gradlew assembleDebug
+        run: ./gradlew assembleDebug --stacktrace
 
       - name: 發布繁中 APK 供手機下載
         uses: actions/upload-artifact@v4
