@@ -15,93 +15,88 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: 安裝簡繁轉換工具 OpenCC
+      - name: 安裝 OpenCC
         run: pip install opencc
 
-      - name: 下載編譯必備組件與資源 (Windbot/字型/卡庫/腳本)
+      - name: 下載 libWindbot.aar（並驗證係真 AAR）
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -e
           mkdir -p mobile/libs
+          # 喺 mercury233/libWindbot 嘅 releases 入面搵第一個 .aar 附件
+          URL=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/mercury233/libWindbot/releases?per_page=30" \
+            | python3 -c "
+          import sys, json
+          for rel in json.load(sys.stdin):
+              for a in rel.get('assets', []):
+                  if a['name'].lower().endswith('.aar'):
+                      print(a['browser_download_url']); sys.exit(0)
+          ")
+          echo "AAR URL = $URL"
+          if [ -z "$URL" ]; then
+            echo "::error::搵唔到任何 .aar 附件，請手動上載 libWindbot.aar 到 mobile/libs/"
+            exit 1
+          fi
+          curl -fL -o mobile/libs/libWindbot.aar "$URL"
+          ls -l mobile/libs/libWindbot.aar
+          # 驗證：真 AAR 一定有 AndroidManifest.xml
+          unzip -l mobile/libs/libWindbot.aar | grep -q AndroidManifest.xml \
+            || { echo "::error::下載咗嘅唔係有效 AAR"; exit 1; }
+
+      - name: 下載卡庫、字型、腳本
+        run: |
+          set -e
           mkdir -p mobile/assets/data/fonts
-          
-          # 1. 下載專案必備的 libWindbot.aar
-          echo "正在下載 libWindbot.aar..."
-          curl -L -o mobile/libs/libWindbot.aar https://github.com/fallenstardust/YGOMobile-cn-ko-en/releases/download/sounds/libWindbot.aar || \
-          curl -L -o mobile/libs/libWindbot.aar https://github.com/mercury233/libWindbot/releases/download/v1.0.3/libWindbot.aar
-
-          # 2. 建立卡圖包 pics.zip 佔位檔
           zip -q mobile/assets/data/pics.zip .gitignore
-
-          # 3. 抓取官方最新卡庫 (cards.cdb)
-          echo "正在下載最新 cards.cdb..."
-          curl -L -o mobile/assets/data/cards.cdb https://github.com/mycard/ygopro-database/raw/master/locales/zh-CN/cards.cdb
-          
-          # 4. 抓取官方系統提示字 (strings.conf)
-          echo "正在下載最新 strings.conf..."
-          curl -L -o mobile/assets/data/strings.conf https://github.com/mycard/ygopro-database/raw/master/locales/zh-CN/strings.conf
-
-          # 5. 抓取字型檔 (ygo.ttf)
-          echo "正在下載遊戲字型..."
-          curl -L -o mobile/assets/data/fonts/ygo.ttf https://github.com/fallenstardust/YGOMobile-cn-ko-en/releases/download/sounds/ygo.ttf
-
-          # 6. 打包卡片腳本 (scripts.zip)
-          echo "正在下載並打包 scripts.zip..."
-          curl -L -o scripts_master.zip https://github.com/mycard/ygopro-scripts/archive/refs/heads/master.zip
+          curl -fL -o mobile/assets/data/cards.cdb https://github.com/mycard/ygopro-database/raw/master/locales/zh-CN/cards.cdb
+          curl -fL -o mobile/assets/data/strings.conf https://github.com/mycard/ygopro-database/raw/master/locales/zh-CN/strings.conf
+          curl -fL -o mobile/assets/data/fonts/ygo.ttf https://github.com/fallenstardust/YGOMobile-cn-ko-en/releases/download/sounds/ygo.ttf
+          curl -fL -o scripts_master.zip https://github.com/mycard/ygopro-scripts/archive/refs/heads/master.zip
           unzip -q scripts_master.zip
           mv ygopro-scripts-master script
           zip -rq mobile/assets/data/scripts.zip script
           rm -rf script scripts_master.zip
 
-      - name: 繁中化卡庫與系統提示（安全保留 XML 格式）
+      - name: 繁中化卡庫與系統提示
         run: |
-          python - << 'EOF'
+          python - << 'PYEOF'
           import os, re, sqlite3, opencc
+          import xml.etree.ElementTree as ET
 
           cc = opencc.OpenCC('s2twp.json')
 
-          # 1. 繁中化 cards.cdb
           cdb_path = 'mobile/assets/data/cards.cdb'
-          if os.path.exists(cdb_path):
-              conn = sqlite3.connect(cdb_path)
-              c = conn.cursor()
-              c.execute('SELECT id, name, desc, str1, str2, str3, str4, str5, str6, str7, str8, str9, str10, str11, str12, str13, str14, str15, str16 FROM texts')
-              rows = c.fetchall()
-              updated = []
-              for r in rows:
-                  card_id = r[0]
-                  converted = [cc.convert(col) if col else '' for col in r[1:]]
-                  updated.append(tuple(converted) + (card_id,))
-              c.executemany('''
-                  UPDATE texts SET 
-                      name=?, desc=?, str1=?, str2=?, str3=?, str4=?, str5=?, str6=?, str7=?, str8=?,
-                      str9=?, str10=?, str11=?, str12=?, str13=?, str14=?, str15=?, str16=? 
-                  WHERE id=?
-              ''', updated)
-              conn.commit()
-              conn.close()
-              print(f'cards.cdb 繁中化完成，共處理 {len(rows)} 張卡片')
+          conn = sqlite3.connect(cdb_path)
+          c = conn.cursor()
+          cols = ['name', 'desc'] + [f'str{i}' for i in range(1, 17)]
+          c.execute(f"SELECT id, {', '.join(cols)} FROM texts")
+          rows = c.fetchall()
+          updated = [tuple(cc.convert(v) if v else '' for v in r[1:]) + (r[0],) for r in rows]
+          c.executemany(
+              f"UPDATE texts SET {', '.join(k + '=?' for k in cols)} WHERE id=?", updated)
+          conn.commit()
+          conn.close()
+          print('cards.cdb 完成', len(rows))
 
-          # 2. 繁中化 strings.conf
           conf_path = 'mobile/assets/data/strings.conf'
-          if os.path.exists(conf_path):
-              with open(conf_path, 'r', encoding='utf-8', errors='ignore') as f:
-                  text = f.read()
-              with open(conf_path, 'w', encoding='utf-8') as f:
-                  f.write(cc.convert(text))
-              print('strings.conf 繁中化完成')
+          with open(conf_path, 'r', encoding='utf-8', errors='ignore') as f:
+              text = f.read()
+          with open(conf_path, 'w', encoding='utf-8') as f:
+              f.write(cc.convert(text))
+          print('strings.conf 完成')
 
-          # 3. 安全繁中化 strings.xml (僅替換標籤文字內容，保留標籤名與屬性)
           xml_path = 'mobile/src/main/res/values/strings.xml'
           if os.path.exists(xml_path):
-              with open(xml_path, 'r', encoding='utf-8', errors='ignore') as f:
+              with open(xml_path, 'r', encoding='utf-8') as f:
                   text = f.read()
-              # 正則只轉換 > 與 < 之間的文本
-              def convert_tag(match):
-                  return '>' + cc.convert(match.group(1)) + '<'
-              converted_xml = re.sub(r'>([^<]+)<', convert_tag, text)
+              out = re.sub(r'>([^<]+)<', lambda m: '>' + cc.convert(m.group(1)) + '<', text)
+              ET.fromstring(out.encode('utf-8'))   # 轉完要仲係合法 XML，否則即刻報錯
               with open(xml_path, 'w', encoding='utf-8') as f:
-                  f.write(converted_xml)
-              print('strings.xml 安全繁中化完成')
-          EOF
+                  f.write(out)
+              print('strings.xml 完成（XML 驗證通過）')
+          PYEOF
 
       - name: 配置 Java (JDK 17)
         uses: actions/setup-java@v4
@@ -119,11 +114,11 @@ jobs:
           chmod +x gradlew
           ./gradlew :libcore:buildYgoCore
 
-      - name: 打包繁中版 APK
-        run: ./gradlew assembleDebug --stacktrace
+      - name: 打包 APK（只打 cn 版 debug）
+        run: ./gradlew :mobile:assembleCnDebug --stacktrace -Dorg.gradle.jvmargs="-Xmx4096m"
 
-      - name: 發布繁中 APK 供手機下載
+      - name: 上載 APK
         uses: actions/upload-artifact@v4
         with:
-          name: YGOMobile-繁體中文版
-          path: mobile/build/outputs/apk/debug/*.apk
+          name: YGOMobile-TC
+          path: mobile/build/outputs/apk/**/*.apk
