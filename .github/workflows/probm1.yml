@@ -1,0 +1,107 @@
+name: Probe 1 - ygom.top 下載與 Header 測試
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe-download:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 檢出專案原始碼
+        uses: actions/checkout@v4
+
+      - name: 測試 ygom.top (優先) 與 Fallback 下載
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          CANDS=()
+
+          echo "=== 1. 抓取 ygom.top 官方版本檔 (第一優先) ==="
+          curl -sL --http1.1 --max-time 30 \
+            -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+            -e "https://ygom.top/" \
+            https://ygom.top/ver_code.json -o /tmp/ver.json || echo "取得 ver_code.json 失敗"
+
+          if [ -s /tmp/ver.json ]; then
+            echo "--- ver_code.json 內容 ---"
+            cat /tmp/ver.json
+            echo ""
+            # 解析 ver_code.json 內的 apk 網址
+            for u in $(grep -oiE "https?://[^\"' ]+\.apk" /tmp/ver.json); do
+              CANDS+=("$u")
+            done
+            V_ONLINE=$(grep -oE "[0-9]+\.[0-9]+\.[0-9]+" /tmp/ver.json | head -1)
+            [ -n "$V_ONLINE" ] && CANDS+=("https://files.ygom.top/files/YGOMobile_${V_ONLINE}.Apk")
+          fi
+
+          echo "=== 2. 由專案 versionName 拼湊 files.ygom.top (第二優先) ==="
+          VER=$(grep -hE "versionName" mobile/build.gradle build.gradle 2>/dev/null \
+            | grep -oE "[0-9]+\.[0-9]+(\.[0-9]+)?" | head -1)
+          echo "本地專案 versionName = [$VER]"
+          [ -n "$VER" ] && CANDS+=("https://files.ygom.top/files/YGOMobile_${VER}.Apk")
+
+          echo "=== 3. GitHub release-latest (最後備用) ==="
+          GH_URL=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/fallenstardust/YGOMobile-cn-ko-en/releases/tags/release-latest" \
+            | python3 -c "
+          import sys, json
+          try:
+              d = json.load(sys.stdin)
+              for a in d.get('assets', []):
+                  if a['name'].lower().endswith('.apk'):
+                      print(a['browser_download_url']); break
+          except Exception:
+              pass
+          ")
+          [ -n "$GH_URL" ] && CANDS+=("$GH_URL")
+
+          echo "================ 候選清單順序 ================"
+          printf '%s\n' "${CANDS[@]}"
+          echo "=============================================="
+
+          URL=""
+          for u in "${CANDS[@]}"; do
+            echo ""
+            echo ">>> 正在測試: $u"
+
+            # 先發送 HEAD 請求檢查狀態碼與伺服器回應標頭
+            echo "--- Response Headers ---"
+            curl -s -I -L --http1.1 --max-time 15 \
+              -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+              -e "https://ygom.top/" "$u" | head -n 12
+
+            # 開始測試下載 (限制前 20MB 或整檔嘗試)
+            rm -f test_target.apk
+            CODE=$(curl -sL --http1.1 --retry 2 --max-time 180 \
+              -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+              -e "https://ygom.top/" \
+              -w "%{http_code}" -o test_target.apk "$u")
+
+            echo "下載 HTTP 狀態碼: $CODE"
+            if [ "$CODE" != "200" ]; then
+              echo "狀態碼非 200，測試下一個來源"
+              continue
+            fi
+
+            SZ=$(stat -c %s test_target.apk 2>/dev/null || echo 0)
+            echo "下載檔案大小: $SZ bytes"
+
+            # 驗證是否為大於 50MB 且為合法 zip/apk 結構
+            if [ "$SZ" -gt 50000000 ] && python3 -c "import zipfile, sys; sys.exit(0 if zipfile.is_zipfile('test_target.apk') else 1)"; then
+              echo ">>> 成功！$u 下載成功且為有效 APK"
+              URL="$u"
+              break
+            else
+              echo "檔案過小或損壞，並非有效 APK"
+            fi
+          done
+
+          echo ""
+          echo "================ 最終測試結果 ================"
+          if [ -n "$URL" ]; then
+            echo "成功由來源獲取 APK: $URL"
+          else
+            echo "::error::所有 ygom.top 及後備來源均無法下載"
+            exit 1
+          fi
