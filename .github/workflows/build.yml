@@ -556,18 +556,26 @@ jobs:
 
           export APK_URL="https://github.com/${REPO}/releases/download/${TAG_NAME}/YGOMobile-TC.apk"
           export VER_NAME VER_CODE
-          # 注意：ver_code.json 欄位格式係 Gemini 假設嘅，未對照 App 內嘅解析程式碼驗證
+          # 已對齊官方真實 ver_code.json 格式 (versionname 全小寫、download_link 陣列)
           python3 - << 'PYEOF'
-          import json, os
+          import json, os, datetime
+
+          now = datetime.datetime.now()
+          update_time_str = f"{now.year}年{now.month}月"
+
           data = {
-              "versionCode": int(os.environ["VER_CODE"]),
-              "versionName": os.environ["VER_NAME"],
-              "apkUrl": os.environ["APK_URL"],
-              "updateLog": "YGOMobile 繁體中文版自動更新\n已同步最新官方卡庫與先行卡。",
+              "versionname": os.environ["VER_NAME"],
+              "update_time": update_time_str,
+              "download_link": [
+                  os.environ["APK_URL"]
+              ],
+              "pre_release_code": {}
           }
+
           with open("ver_code.json", "w", encoding="utf-8") as f:
               json.dump(data, f, ensure_ascii=False, indent=2)
           PYEOF
+
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
