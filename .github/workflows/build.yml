@@ -162,6 +162,73 @@ jobs:
           du -sh mobile/assets/data/pics.zip mobile/assets/data/sound 2>/dev/null
           exit 0
 
+      - name: 動態修補 Constants.java (全域配置與繁中網址注入)
+        run: |
+          python3 - << 'PYEOF'
+          import re, sys
+
+          file_path = "mobile/src/main/java/cn/garymb/ygomobile/Constants.java"
+
+          with open(file_path, "r", encoding="utf-8") as f:
+              content = f.read()
+
+          # 1. 開啟網路卡圖開關
+          content, n_net = re.subn(
+              r"boolean\s+NETWORK_IMAGE\s*=\s*false;",
+              "boolean NETWORK_IMAGE = true;",
+              content
+          )
+
+          # 2. 替換主卡圖 URL (Momobako 233 CDN)
+          content, n_img = re.subn(
+              r"String\s+IMAGE_URL\s*=\s*\"[^\"]*\";",
+              "String IMAGE_URL = \"https://cdn.233.momobako.com/ygopro/pics/%s.jpg\";",
+              content
+          )
+
+          # 3. 替換場地卡圖 URL (Momobako 233 CDN)
+          content, n_field = re.subn(
+              r"String\s+IMAGE_FIELD_URL\s*=\s*\"[^\"]*\";",
+              "String IMAGE_FIELD_URL = \"https://cdn.233.momobako.com/ygopro/pics/field/%s.jpg\";",
+              content
+          )
+
+          # 4. 替換先行卡四條網址 (指向你的 GitHub 繁中先行卡倉庫)
+          content, n_v = re.subn(
+              r"String\s+URL_CN_DATAVER\s*=\s*\"[^\"]*\";",
+              "String URL_CN_DATAVER = \"https://raw.githubusercontent.com/yi0332us/ygomobile-superpre-hk/main/version.txt\";",
+              content
+          )
+          content, n_json = re.subn(
+              r"String\s+URL_PRE_CARD\s*=\s*\"[^\"]*\";",
+              "String URL_PRE_CARD = \"https://raw.githubusercontent.com/yi0332us/ygomobile-superpre-hk/main/test-release.json\";",
+              content
+          )
+          content, n_ypk1 = re.subn(
+              r"String\s+URL_SUPERPRE_CN_FILE\s*=\s*\"[^\"]*\";",
+              "String URL_SUPERPRE_CN_FILE = \"https://raw.githubusercontent.com/yi0332us/ygomobile-superpre-hk/main/ygopro-super-pre.ypk\";",
+              content
+          )
+          content, n_ypk2 = re.subn(
+              r"String\s+URL_SUPERPRE_CN_FILE_ALT\s*=\s*\"[^\"]*\";",
+              "String URL_SUPERPRE_CN_FILE_ALT = \"https://raw.githubusercontent.com/yi0332us/ygomobile-superpre-hk/main/ygopro-super-pre.ypk\";",
+              content
+          )
+
+          print(f"修補狀態: NETWORK_IMAGE={n_net}, 卡圖={n_img}, 場地={n_field}, 先行卡配置=({n_v},{n_json},{n_ypk1},{n_ypk2})")
+
+          # 嚴格驗證：確保每一條皆成功替換且只替換 1 次
+          if any(x != 1 for x in [n_net, n_img, n_field, n_v, n_json, n_ypk1, n_ypk2]):
+              print("::error::Constants.java 替換次數不為 1，修補失敗！")
+              sys.exit(1)
+
+          with open(file_path, "w", encoding="utf-8") as f:
+              f.write(content)
+
+          print("Constants.java 動態修補完畢，準備編譯。")
+          PYEOF
+
+
       - name: 改介面文字（簡體中文→繁體中文；ICP 備案→繁體中文化 Powered by Claude & Gemini）
         run: |
           python3 - << 'PYEOF'
