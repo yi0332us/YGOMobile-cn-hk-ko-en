@@ -468,3 +468,52 @@ jobs:
           name: YGOMobile-TC
           path: dist/*.apk
           if-no-files-found: error
+          
+      - name: 發布繁中版 Release 並更新 ver_code.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          # 1. 尋找編譯出來的 APK
+          APK_PATH=$(find mobile/build/outputs/apk -iname "*.apk" | head -1)
+          if [ -z "$APK_PATH" ]; then
+            echo "::error::找不到編譯產出的 APK！"
+            exit 1
+          fi
+
+          # 2. 取得版本號與當前日期產生 Tag
+          VER_NAME=$(grep -hE "versionName" mobile/build.gradle build.gradle 2>/dev/null | grep -oE "[0-9]+\.[0-9]+(\.[0-9]+)?" | head -1)
+          VER_CODE=$(grep -hE "versionCode" mobile/build.gradle build.gradle 2>/dev/null | grep -oE "[0-9]+" | head -1)
+          TAG_NAME="v${VER_NAME}-$(date +%Y%m%d%H%M)"
+
+          echo "發布版本: $TAG_NAME (versionCode: $VER_CODE)"
+
+          # 3. 發布 GitHub Release 並上傳 APK
+          gh release create "$TAG_NAME" "$APK_PATH#YGOMobile-TC.apk" \
+            --title "YGOMobile 繁體中文版 $VER_NAME" \
+            --notes "自動同步官方最新版本與卡庫。"
+
+          APK_URL="https://github.com/${{ github.repository }}/releases/download/${TAG_NAME}/YGOMobile-TC.apk"
+
+          # 4. 生成供手機 App 檢查更新用的 ver_code.json
+          python3 - << PYEOF
+          import json
+
+          data = {
+              "versionCode": int("$VER_CODE"),
+              "versionName": "$VER_NAME",
+              "apkUrl": "$APK_URL",
+              "updateLog": "YGOMobile 繁體中文版自動更新\n已同步最新官方卡庫與先行卡。"
+          }
+
+          with open("ver_code.json", "w", encoding="utf-8") as f:
+              json.dump(data, f, ensure_ascii=False, indent=2)
+          PYEOF
+
+          # 5. 推送 ver_code.json 回倉庫 main/master 分支
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add ver_code.json
+          git commit -m "docs: 自動更新 ver_code.json 版本至 $TAG_NAME" || true
+          git push origin HEAD:master
+
