@@ -63,15 +63,21 @@ jobs:
           unzip -l mobile/libs/libWindbot.aar | grep -q AndroidManifest.xml \
             || { echo "::error::下載咗嘅唔係有效 AAR"; exit 1; }
 
-      - name: 下載卡庫、字型、腳本
+      - name: 下載卡庫、字型、腳本與音效
         run: |
           set -e
-          mkdir -p mobile/assets/data/fonts
+          mkdir -p mobile/assets/data/fonts mobile/assets/data/sound
           zip -q mobile/assets/data/pics.zip .gitignore
-          curl -fL -o mobile/assets/data/cards.cdb https://github.com/mycard/ygopro-database/raw/master/locales/zh-CN/cards.cdb
-          curl -fL -o mobile/assets/data/strings.conf https://github.com/mycard/ygopro-database/raw/master/locales/zh-CN/strings.conf
-          curl -fL -o mobile/assets/data/fonts/ygo.ttf https://github.com/fallenstardust/YGOMobile-cn-ko-en/releases/download/sounds/ygo.ttf
-          curl -fL -o scripts_master.zip https://github.com/mycard/ygopro-scripts/archive/refs/heads/master.zip
+          curl -fL -o mobile/assets/data/cards.cdb [https://github.com/mycard/ygopro-database/raw/master/locales/zh-CN/cards.cdb](https://github.com/mycard/ygopro-database/raw/master/locales/zh-CN/cards.cdb)
+          curl -fL -o mobile/assets/data/fonts/ygo.ttf [https://github.com/fallenstardust/YGOMobile-cn-ko-en/releases/download/sounds/ygo.ttf](https://github.com/fallenstardust/YGOMobile-cn-ko-en/releases/download/sounds/ygo.ttf)
+          
+          # 下載並解壓遊戲背景音樂與音效
+          curl -fL -o sound.zip [https://github.com/fallenstardust/YGOMobile-cn-ko-en/releases/download/sounds/sound.zip](https://github.com/fallenstardust/YGOMobile-cn-ko-en/releases/download/sounds/sound.zip)
+          unzip -qo sound.zip -d mobile/assets/data/sound/
+          rm -f sound.zip
+
+          # 下載卡片腳本
+          curl -fL -o scripts_master.zip [https://github.com/mycard/ygopro-scripts/archive/refs/heads/master.zip](https://github.com/mycard/ygopro-scripts/archive/refs/heads/master.zip)
           unzip -q scripts_master.zip
           mv ygopro-scripts-master script
           zip -rq mobile/assets/data/scripts.zip script
