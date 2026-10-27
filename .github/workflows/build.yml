@@ -69,8 +69,7 @@ jobs:
         run: |
           set +e
           CANDS=()
-
-          # 1) 由 GitHub API 獲取 release-latest 嘅官方 APK
+          # 1) 首選：GitHub release-latest 嘅 APK（GitHub 機房直連，最穩）
           GH_URL=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
             "https://api.github.com/repos/fallenstardust/YGOMobile-cn-ko-en/releases/tags/release-latest" \
             | python3 -c "
@@ -79,21 +78,30 @@ jobs:
           for a in d.get('assets', []):
               if a['name'].lower().endswith('.apk'):
                   print(a['browser_download_url']); break
-          " 2>/dev/null)
+          ")
           [ -n "$GH_URL" ] && CANDS+=("$GH_URL")
-
-          # 2) 後備：直接指向 release-latest 固定下載連結
-          CANDS+=("https://github.com/fallenstardust/YGOMobile-cn-ko-en/releases/download/release-latest/YGOMobile.apk")
-
-          # 去除重複項
-          readarray -t CANDS < <(printf '%s\n' "${CANDS[@]}" | awk '!seen[$0]++')
-
+          # 2) 後備：由專案 versionName 砌 files.ygom.top 直連（呢個來源曾經回 403，只作備用）
+          VER=$(grep -hE "versionName" mobile/build.gradle build.gradle 2>/dev/null \
+                | grep -oE "[0-9]+\.[0-9]+(\.[0-9]+)?" | head -1)
+          echo "專案 versionName = [$VER]"
+          [ -n "$VER" ] && CANDS+=("https://files.ygom.top/files/YGOMobile_${VER}.Apk")
+          # 3) 後備：官方版本檔 ver_code.json（App 自己都讀呢個），印出內容方便除錯
+          curl -fsSL --max-time 30 https://ygom.top/ver_code.json -o /tmp/ver.json && {
+            echo "=== ver_code.json ==="; head -c 600 /tmp/ver.json; echo
+            for u in $(grep -oiE "https?://[^\"' ]+\.apk" /tmp/ver.json); do CANDS+=("$u"); done
+            V2=$(grep -oE "[0-9]+\.[0-9]+\.[0-9]+" /tmp/ver.json | head -1)
+            [ -n "$V2" ] && CANDS+=("https://files.ygom.top/files/YGOMobile_${V2}.Apk")
+          }
           printf '候選來源:\n'; printf '  %s\n' "${CANDS[@]}"
           URL=""
           for u in "${CANDS[@]}"; do
             echo ">>> 嘗試 $u"
             rm -f official.apk
-            curl -fL --max-time 900 -o official.apk "$u" || continue
+            CODE=$(curl -sL --max-time 900 -o official.apk -w "%{http_code}" \
+              -A "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36" \
+              -e "https://ygom.top/" "$u")
+            echo "    HTTP $CODE"
+            [ "$CODE" = "200" ] || continue
             SZ=$(stat -c %s official.apk)
             if [ "$SZ" -gt 50000000 ] && python3 -c "import zipfile,sys; sys.exit(0 if zipfile.is_zipfile('official.apk') else 1)"; then
               URL="$u"; break
@@ -109,33 +117,50 @@ jobs:
           python3 - << 'PYEOF'
           import zipfile, os, collections
           z = zipfile.ZipFile('official.apk')
-          sizes = collections.Counter()
+          names = [n for n in z.namelist() if n.startswith('assets/') and not n.endswith('/')]
+
+          # 1. 官方 assets 頂層結構同大小
+          top = collections.Counter()
           for i in z.infolist():
-              if i.filename.startswith('assets/data/'):
+              if i.filename.startswith('assets/') and not i.filename.endswith('/'):
                   parts = i.filename.split('/')
-                  sizes['/'.join(parts[:3])] += i.file_size
-          print('=== 官方 APK assets/data 各項大小（由大到細）===')
-          for k, v in sizes.most_common(30):
+                  top['/'.join(parts[:2])] += i.file_size
+          print('=== 官方 APK assets 頂層（由大到細）===')
+          for k, v in top.most_common(40):
               print(f'{v:>12,}  {k}')
-          names = z.namelist()
+          print('=== 官方 APK 內所有 .cdb ===')
+          for i in z.infolist():
+              if i.filename.lower().endswith('.cdb'):
+                  print(f'{i.file_size:>12,}  {i.filename}')
+
+          # 2. 卡圖包：取代佔位檔
           if 'assets/data/pics.zip' in names:
               z.extract('assets/data/pics.zip', 'official_x')
               os.replace('official_x/assets/data/pics.zip', 'mobile/assets/data/pics.zip')
               print('已用官方 pics.zip 取代佔位檔:', os.path.getsize('mobile/assets/data/pics.zip'), 'bytes')
           else:
               print('::warning::官方 APK 冇 assets/data/pics.zip')
-          snd = [n for n in names if n.startswith('assets/data/sound/') and not n.endswith('/')]
-          for n in snd:
-              target = os.path.join('mobile', n.replace('assets/data/', 'assets/data/', 1))
+
+          # 3. 通用補齊：repo 入面冇嘅 assets 檔（BGM、其他語言資料等）一律由官方補上；已存在嘅唔覆蓋
+          added = []
+          for n in names:
+              target = os.path.join('mobile', n)
+              if os.path.exists(target):
+                  continue
               os.makedirs(os.path.dirname(target), exist_ok=True)
               with z.open(n) as src, open(target, 'wb') as dst:
                   dst.write(src.read())
-          print('sound 檔案數（來自官方 APK）:', len(snd))
+              added.append(target)
+          with open('.official_added.txt', 'w', encoding='utf-8') as f:
+              f.write('\n'.join(added))
+          bydir = collections.Counter('/'.join(p.split('/')[:4]) for p in added)
+          print(f'=== 由官方補入 {len(added)} 個檔（repo 本身冇）===')
+          for k, v in bydir.most_common(30):
+              print(f'{v:>6} 個  {k}')
           PYEOF
           rm -rf official.apk official_x
           du -sh mobile/assets/data/pics.zip mobile/assets/data/sound 2>/dev/null
           exit 0
-
 
       - name: 改介面文字（簡體中文→繁體中文；ICP 備案→繁體中文化 Powered by Claude & Gemini）
         run: |
@@ -227,11 +252,17 @@ jobs:
                   print(f'{s_path} 伺服器列表完成')
 
           # 4. 繁中化說明文檔（嚴格 UTF-8；解碼失敗或冇變化就唔郁，避免弄壞檔案）
+          #    由官方補入嘅檔案（其他語言資料等）一律唔轉換
+          added = set()
+          if os.path.exists('.official_added.txt'):
+              added = set(open('.official_added.txt', encoding='utf-8').read().split('\n'))
           for root, dirs, files in os.walk('mobile'):
               if 'assets' in root and 'build' not in root and '/sound' not in root:
                   for file in files:
                       if file.endswith(('.txt', '.html', '.md', '.json')) and not file.endswith(('output-metadata.json', 'version.txt')):
                           fpath = os.path.join(root, file)
+                          if fpath in added:
+                              continue
                           try:
                               with open(fpath, 'r', encoding='utf-8') as f:
                                   content = f.read()
