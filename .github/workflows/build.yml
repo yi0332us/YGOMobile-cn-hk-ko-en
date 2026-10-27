@@ -10,24 +10,6 @@ jobs:
       - name: 檢出專案原始碼
         uses: actions/checkout@v4
 
-      - name: 掃描簡體字來源（診斷，唔影響建置）
-        continue-on-error: true
-        run: |
-          echo "=== A. 含菜單簡體字嘅檔案（本地联机/编辑卡组/种类）==="
-          grep -rIl --exclude-dir=.git -e "本地联机" -e "编辑卡组" -e "种类" . | head -30
-          echo "=== B. 所有 .conf / .ini 檔 ==="
-          find . -type f \( -name "*.conf" -o -name "*.ini" \) -not -path "./.git/*" -printf '%s %p\n'
-          echo "=== C. res 語言資料夾 ==="
-          ls -d mobile/src/main/res/values* 2>/dev/null
-          echo "=== D. assets 結構（3 層）==="
-          find mobile/assets -maxdepth 3 2>/dev/null | head -60
-          echo "=== E. Constants.java 內嘅網址 ==="
-          grep -n -E "http|DEFAULT_GAME_DIR|ygocore" mobile/src/main/java/cn/garymb/ygomobile/Constants.java | head -50
-          echo "=== F. 同公告/更新有關嘅 java 檔 ==="
-          grep -rIl --include=*.java -i -E "notice|announce|公告" mobile/src | head -20
-          echo "=== G. 資源檔入面有簡體字嘅 xml（取樣 20 個）==="
-          grep -rIl --include=*.xml -P "[\x{4E00}-\x{9FFF}]" mobile/src/main/res | head -20
-
       - name: 配置 Python 環境
         uses: actions/setup-python@v5
         with:
@@ -63,25 +45,47 @@ jobs:
           unzip -l mobile/libs/libWindbot.aar | grep -q AndroidManifest.xml \
             || { echo "::error::下載咗嘅唔係有效 AAR"; exit 1; }
 
-      - name: 下載卡庫、字型、腳本與音效
+      - name: 下載卡庫、字型、腳本
         run: |
           set -e
-          mkdir -p mobile/assets/data/fonts mobile/assets/data/sound
+          mkdir -p mobile/assets/data/fonts
           zip -q mobile/assets/data/pics.zip .gitignore
-          curl -fL -o mobile/assets/data/cards.cdb [https://github.com/mycard/ygopro-database/raw/master/locales/zh-CN/cards.cdb](https://github.com/mycard/ygopro-database/raw/master/locales/zh-CN/cards.cdb)
-          curl -fL -o mobile/assets/data/fonts/ygo.ttf [https://github.com/fallenstardust/YGOMobile-cn-ko-en/releases/download/sounds/ygo.ttf](https://github.com/fallenstardust/YGOMobile-cn-ko-en/releases/download/sounds/ygo.ttf)
-          
-          # 下載並解壓遊戲背景音樂與音效
-          curl -fL -o sound.zip [https://github.com/fallenstardust/YGOMobile-cn-ko-en/releases/download/sounds/sound.zip](https://github.com/fallenstardust/YGOMobile-cn-ko-en/releases/download/sounds/sound.zip)
-          unzip -qo sound.zip -d mobile/assets/data/sound/
-          rm -f sound.zip
-
-          # 下載卡片腳本
-          curl -fL -o scripts_master.zip [https://github.com/mycard/ygopro-scripts/archive/refs/heads/master.zip](https://github.com/mycard/ygopro-scripts/archive/refs/heads/master.zip)
+          curl -fL -o mobile/assets/data/cards.cdb https://github.com/mycard/ygopro-database/raw/master/locales/zh-CN/cards.cdb
+          curl -fL -o mobile/assets/data/fonts/ygo.ttf https://github.com/fallenstardust/YGOMobile-cn-ko-en/releases/download/sounds/ygo.ttf
+          curl -fL -o scripts_master.zip https://github.com/mycard/ygopro-scripts/archive/refs/heads/master.zip
           unzip -q scripts_master.zip
           mv ygopro-scripts-master script
           zip -rq mobile/assets/data/scripts.zip script
           rm -rf script scripts_master.zip
+
+      - name: 下載音效（搵到就裝，搵唔到只警告唔令建置失敗）
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p mobile/assets/data/sound
+          URL=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/fallenstardust/YGOMobile-cn-ko-en/releases/tags/sounds" \
+            | python3 -c "
+          import sys, json
+          d = json.load(sys.stdin)
+          names = [(a['name'], a['browser_download_url']) for a in d.get('assets', [])]
+          print('ASSETS:', [n for n, _ in names], file=sys.stderr)
+          for n, u in names:
+              if n.lower().endswith('.zip') and ('sound' in n.lower() or 'audio' in n.lower() or 'bgm' in n.lower()):
+                  print(u); break
+          " ) || URL=""
+          echo "SOUND URL = $URL"
+          if [ -z "$URL" ]; then
+            echo "::warning::搵唔到音效壓縮包，今次唔包含音效"
+            exit 0
+          fi
+          curl -fL -o sound.zip "$URL"
+          rm -rf snd_tmp && mkdir snd_tmp
+          unzip -qo sound.zip -d snd_tmp
+          if [ -d snd_tmp/sound ]; then cp -r snd_tmp/sound/. mobile/assets/data/sound/; else cp -r snd_tmp/. mobile/assets/data/sound/; fi
+          rm -rf snd_tmp sound.zip
+          find mobile/assets/data/sound -type f | head -10
+          du -sh mobile/assets/data/sound
 
       - name: 繁中化卡庫與系統提示
         run: |
@@ -110,7 +114,7 @@ jobs:
           if not os.path.exists(conf_src):
               conf_src = 'mobile/assets/data/strings.conf'
 
-          with open(conf_src, 'r', encoding='utf-8', errors='ignore') as f:
+          with open(conf_src, 'r', encoding='utf-8') as f:
               text = f.read()
 
           converted_conf = cc.convert(text)
@@ -125,7 +129,7 @@ jobs:
           # 3. 繁中化伺服器清單 serverlist.xml
           for s_path in ['mobile/src/main/assets/serverlist.xml', 'mobile/assets/serverlist.xml', 'mobile/src/main/assets/server_list.xml']:
               if os.path.exists(s_path):
-                  with open(s_path, 'r', encoding='utf-8', errors='ignore') as f:
+                  with open(s_path, 'r', encoding='utf-8') as f:
                       s_text = f.read()
                   converted_s = cc.convert(s_text)
                   ET.fromstring(converted_s.encode('utf-8'))
@@ -133,20 +137,22 @@ jobs:
                     f.write(converted_s)
                   print(f'{s_path} 伺服器列表完成')
 
-          # 4. 繁中化說明文檔
+          # 4. 繁中化說明文檔（嚴格 UTF-8；解碼失敗或冇變化就唔郁，避免弄壞檔案）
           for root, dirs, files in os.walk('mobile'):
-              if 'assets' in root and 'build' not in root:
+              if 'assets' in root and 'build' not in root and '/sound' not in root:
                   for file in files:
                       if file.endswith(('.txt', '.html', '.md', '.json')) and not file.endswith(('output-metadata.json', 'version.txt')):
                           fpath = os.path.join(root, file)
                           try:
-                              with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
+                              with open(fpath, 'r', encoding='utf-8') as f:
                                   content = f.read()
-                              with open(fpath, 'w', encoding='utf-8') as f:
-                                  f.write(cc.convert(content))
-                              print(f'文本資源完成: {fpath}')
-                          except Exception:
-                              pass
+                              conv = cc.convert(content)
+                              if conv != content:
+                                  with open(fpath, 'w', encoding='utf-8') as f:
+                                      f.write(conv)
+                                  print(f'文本資源完成: {fpath}')
+                          except UnicodeDecodeError:
+                              print(f'跳過（非 UTF-8）: {fpath}')
 
           # 5. 繁中化 strings.xml
           xml_path = 'mobile/src/main/res/values/strings.xml'
@@ -175,10 +181,10 @@ jobs:
       - name: 編譯遊戲 C++ 核心
         run: |
           chmod +x gradlew
-          ./gradlew :libcore:buildYgoCore
+          ./gradlew :libcore:buildYgoCore -Dorg.gradle.internal.http.connectionTimeout=120000 -Dorg.gradle.internal.http.socketTimeout=120000
 
       - name: 打包 APK（只打 cn 版 debug）
-        run: ./gradlew :mobile:assembleCnDebug --stacktrace -Dorg.gradle.jvmargs="-Xmx4096m"
+        run: ./gradlew :mobile:assembleCnDebug --stacktrace -Dorg.gradle.jvmargs="-Xmx4096m" -Dorg.gradle.internal.http.connectionTimeout=120000 -Dorg.gradle.internal.http.socketTimeout=120000
 
       - name: 收集 APK（副檔名係 .Apk，要唔分大細楷）
         run: |
