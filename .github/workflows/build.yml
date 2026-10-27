@@ -11,6 +11,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write  # 加入此行賦予建立 Release 與 push 權限
     steps:
       - name: 檢出專案原始碼
         uses: actions/checkout@v4
