@@ -68,20 +68,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set +e
-          # 1) 由專案自己嘅 versionName 砌 files.ygom.top 直連（版本同我哋原始碼一致）
-          VER=$(grep -hE "versionName" mobile/build.gradle build.gradle 2>/dev/null \
-                | grep -oE "[0-9]+\.[0-9]+(\.[0-9]+)?" | head -1)
-          echo "專案 versionName = [$VER]"
           CANDS=()
-          [ -n "$VER" ] && CANDS+=("https://files.ygom.top/files/YGOMobile_${VER}.Apk")
-          # 2) 官方版本檔 ver_code.json（App 自己都讀呢個），印出內容方便除錯
-          curl -fsSL --max-time 30 https://ygom.top/ver_code.json -o /tmp/ver.json && {
-            echo "=== ver_code.json ==="; head -c 600 /tmp/ver.json; echo
-            for u in $(grep -oiE "https?://[^\"' ]+\.apk" /tmp/ver.json); do CANDS+=("$u"); done
-            V2=$(grep -oE "[0-9]+\.[0-9]+\.[0-9]+" /tmp/ver.json | head -1)
-            [ -n "$V2" ] && CANDS+=("https://files.ygom.top/files/YGOMobile_${V2}.Apk")
-          }
-          # 3) 後備：GitHub release-latest 嘅 APK
+
+          # 1) 由 GitHub API 獲取 release-latest 嘅官方 APK
           GH_URL=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
             "https://api.github.com/repos/fallenstardust/YGOMobile-cn-ko-en/releases/tags/release-latest" \
             | python3 -c "
@@ -90,8 +79,15 @@ jobs:
           for a in d.get('assets', []):
               if a['name'].lower().endswith('.apk'):
                   print(a['browser_download_url']); break
-          ")
+          " 2>/dev/null)
           [ -n "$GH_URL" ] && CANDS+=("$GH_URL")
+
+          # 2) 後備：直接指向 release-latest 固定下載連結
+          CANDS+=("https://github.com/fallenstardust/YGOMobile-cn-ko-en/releases/download/release-latest/YGOMobile.apk")
+
+          # 去除重複項
+          readarray -t CANDS < <(printf '%s\n' "${CANDS[@]}" | awk '!seen[$0]++')
+
           printf '候選來源:\n'; printf '  %s\n' "${CANDS[@]}"
           URL=""
           for u in "${CANDS[@]}"; do
@@ -139,6 +135,7 @@ jobs:
           rm -rf official.apk official_x
           du -sh mobile/assets/data/pics.zip mobile/assets/data/sound 2>/dev/null
           exit 0
+
 
       - name: 改介面文字（簡體中文→繁體中文；ICP 備案→繁體中文化 Powered by Claude & Gemini）
         run: |
