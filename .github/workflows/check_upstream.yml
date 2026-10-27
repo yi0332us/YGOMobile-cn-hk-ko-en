@@ -1,0 +1,82 @@
+name: 自動巡檢官方 Release 更新
+
+on:
+  schedule:
+    # 每 2 小時檢查一次（亦可改成 '0 * * * *' 每小時）
+    - cron: '0 */2 * * *'
+  workflow_dispatch: # 支援手動立即檢查
+
+jobs:
+  check-official:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+
+    steps:
+      - name: 檢出專案
+        uses: actions/checkout@v4
+
+      - name: 比對官方最新 Release 狀態
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 -c '
+          import urllib.request, json, os
+
+          # 讀取 fallenstardust/YGOMobile-cn-ko-en 的 release-latest
+          url = "https://api.github.com/repos/fallenstardust/YGOMobile-cn-ko-en/releases/tags/release-latest"
+          req = urllib.request.Request(url, headers={
+              "User-Agent": "Mozilla/5.0",
+              "Authorization": f"Bearer {os.environ.get(\"GH_TOKEN\", \"\")}"
+          })
+          
+          try:
+              with urllib.request.urlopen(req, timeout=30) as resp:
+                  data = json.load(resp)
+          except Exception as e:
+              print(f"API 請求失敗: {e}")
+              exit(0)
+
+          # 鎖定 YGOMobile.apk 附件
+          apk_asset = next((a for a in data.get("assets", []) if a["name"].lower().endswith(".apk")), None)
+          if not apk_asset:
+              print("官方 release-latest 內找不到 APK 附件")
+              exit(0)
+
+          # 取出特徵特徵值：更新時間 + 檔案大小
+          current_sig = f"{apk_asset.get(\"updated_at\")}_{apk_asset.get(\"size\")}"
+          print(f"官方最新 APK 特徵: {current_sig}")
+
+          # 讀取上次記錄
+          last_sig = ""
+          if os.path.exists("official_apk_version.txt"):
+              with open("official_apk_version.txt", "r", encoding="utf-8") as f:
+                  last_sig = f.read().strip()
+
+          print(f"本地上次記錄: {last_sig}")
+
+          if current_sig != last_sig:
+              print("發現官方有新版本發布！")
+              with open("official_apk_version.txt", "w", encoding="utf-8") as f:
+                  f.write(current_sig)
+              with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+                  out.write("has_new_version=true\n")
+          else:
+              print("官方版本無變更，略過編譯。")
+          '
+
+      - name: 提交新版本記錄並觸發繁中化編譯
+        if: steps.check.outputs.has_new_version == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add official_apk_version.txt
+          git commit -m "chore: 檢測到官方發布新版 APK，自動更新特徵記錄"
+          git push
+
+          # 觸發現有的 build.yml 工作流進行繁中化編譯打包
+          gh workflow run "Build YGOMobile TC"
