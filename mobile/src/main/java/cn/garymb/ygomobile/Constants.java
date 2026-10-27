@@ -212,14 +212,11 @@ public interface Constants {
     String ID2 = "[download_link]";
     String ID3 = "#pre_release_code";
     String URL_GENESYS_LFLIST_DOWNLOAD_LINK = "https://cdntx.moecube.com/ygopro-genesys/lflist.conf";
-    String URL_YGO233_ADVANCE = "https://ygo233.com/pre#pre_release_cards";
-
-    // 官方超先行卡伺服器已關閉停運，改為本機地址以防 OkHttp HttpUrl.parse 回傳 null 導致 NPE 閃退
-    String URL_CN_DATAVER = "https://raw.githubusercontent.com/yi0332us/ygomobile-superpre-hk/main/version.txt";
-    String URL_PRE_CARD = "https://raw.githubusercontent.com/yi0332us/ygomobile-superpre-hk/main/test-release.json";
-    String URL_SUPERPRE_CN_FILE = "https://raw.githubusercontent.com/yi0332us/ygomobile-superpre-hk/main/ygopro-super-pre.ypk";
-    String URL_SUPERPRE_CN_FILE_ALT = "https://raw.githubusercontent.com/yi0332us/ygomobile-superpre-hk/main/ygopro-super-pre.ypk";
-
+    String URL_YGO233_ADVANCE = "";//"https://ygo233.com/pre#pre_release_cards";//关闭233先行卡服务器，但不要删除该字段，许多未调用的遗留代码使用该contant
+    String URL_CN_DATAVER = "https://cdn02.moecube.com:444/ygopro-super-pre/data/version.txt";
+    String URL_PRE_CARD = "https://cdn02.moecube.com:444/ygopro-super-pre/data/test-release.json";
+    String URL_SUPERPRE_CN_FILE = "https://cdn02.moecube.com:444/ygopro-super-pre/archive/ygopro-super-pre.ypk";
+    String URL_SUPERPRE_CN_FILE_ALT = "https://cdn02.moecube.com:444/ygopro-super-pre/archive/ygopro-super-pre.ypk";
     String URL_YGO233_BUG_REPORT = "https://ygo233.com/pre#faq";
     int PORT_Mycard_Super_Pre_Server = 888;
     String URL_Mycard_Super_Pre_Server = "mygo.superpre.pro";
