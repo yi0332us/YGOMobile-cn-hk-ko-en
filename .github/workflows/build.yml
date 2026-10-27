@@ -80,7 +80,7 @@ jobs:
       - name: 繁中化卡庫與系統提示
         run: |
           python - << 'PYEOF'
-          import os, re, shutil, sqlite3, opencc
+          import os, re, sqlite3, opencc
           import xml.etree.ElementTree as ET
 
           cc = opencc.OpenCC('s2twp.json')
@@ -99,17 +99,22 @@ jobs:
           conn.close()
           print('cards.cdb 完成', len(rows))
 
-          # 2. 繁中化 strings.conf（同步輸出至 data/ 與 data/conf/）
-          conf_path = 'mobile/assets/data/strings.conf'
-          with open(conf_path, 'r', encoding='utf-8', errors='ignore') as f:
+          # 2. 繁中化本專案內建手機版 strings.conf 並同步輸出雙路徑
+          conf_src = 'mobile/assets/data/conf/strings.conf'
+          if not os.path.exists(conf_src):
+              conf_src = 'mobile/assets/data/strings.conf'
+
+          with open(conf_src, 'r', encoding='utf-8', errors='ignore') as f:
               text = f.read()
+
           converted_conf = cc.convert(text)
-          with open(conf_path, 'w', encoding='utf-8') as f:
-              f.write(converted_conf)
+
           os.makedirs('mobile/assets/data/conf', exist_ok=True)
           with open('mobile/assets/data/conf/strings.conf', 'w', encoding='utf-8') as f:
               f.write(converted_conf)
-          print('strings.conf 完成（已同步至 data/ 及 data/conf/）')
+          with open('mobile/assets/data/strings.conf', 'w', encoding='utf-8') as f:
+              f.write(converted_conf)
+          print('strings.conf 繁中化完成（已鏡像至 data/ 及 data/conf/）')
 
           # 3. 繁中化伺服器清單 serverlist.xml
           for s_path in ['mobile/src/main/assets/serverlist.xml', 'mobile/assets/serverlist.xml', 'mobile/src/main/assets/server_list.xml']:
@@ -119,10 +124,10 @@ jobs:
                   converted_s = cc.convert(s_text)
                   ET.fromstring(converted_s.encode('utf-8'))
                   with open(s_path, 'w', encoding='utf-8') as f:
-                      f.write(converted_s)
+                    f.write(converted_s)
                   print(f'{s_path} 伺服器列表完成')
 
-          # 4. 繁中化 assets 內說明文檔（隱私政策、更新日誌等）
+          # 4. 繁中化說明文檔
           for root, dirs, files in os.walk('mobile'):
               if 'assets' in root and 'build' not in root:
                   for file in files:
@@ -143,10 +148,10 @@ jobs:
               with open(xml_path, 'r', encoding='utf-8') as f:
                   text = f.read()
               out = re.sub(r'>([^<]+)<', lambda m: '>' + cc.convert(m.group(1)) + '<', text)
-              ET.fromstring(out.encode('utf-8'))   # 轉完要仲係合法 XML，否則即刻報錯
+              ET.fromstring(out.encode('utf-8'))
               with open(xml_path, 'w', encoding='utf-8') as f:
                   f.write(out)
-              print('strings.xml 完成（XML 驗證通過）')
+              print('strings.xml 完成')
           PYEOF
 
 
