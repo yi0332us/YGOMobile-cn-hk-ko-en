@@ -2,6 +2,11 @@ name: Build YGOMobile TC
 
 on:
   workflow_dispatch:
+    inputs:
+      network_image:
+        description: '開啟網上卡圖下載（會逐張下載全卡庫，預設唔開）'
+        type: boolean
+        default: false
 
 jobs:
   build:
@@ -58,34 +63,56 @@ jobs:
           zip -rq mobile/assets/data/scripts.zip script
           rm -rf script scripts_master.zip
 
-      - name: 下載音效（搵到就裝，搵唔到只警告唔令建置失敗）
+      - name: 由官方 APK 攞卡圖包（pics.zip）同音效／音樂
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          mkdir -p mobile/assets/data/sound
+          set +e
           URL=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
-            "https://api.github.com/repos/fallenstardust/YGOMobile-cn-ko-en/releases/tags/sounds" \
+            "https://api.github.com/repos/fallenstardust/YGOMobile-cn-ko-en/releases/tags/release-latest" \
             | python3 -c "
           import sys, json
           d = json.load(sys.stdin)
-          names = [(a['name'], a['browser_download_url']) for a in d.get('assets', [])]
-          print('ASSETS:', [n for n, _ in names], file=sys.stderr)
-          for n, u in names:
-              if n.lower().endswith('.zip') and ('sound' in n.lower() or 'audio' in n.lower() or 'bgm' in n.lower()):
-                  print(u); break
-          " ) || URL=""
-          echo "SOUND URL = $URL"
+          for a in d.get('assets', []):
+              if a['name'].lower().endswith('.apk'):
+                  print(a['browser_download_url']); break
+          ")
+          echo "官方 APK = $URL"
           if [ -z "$URL" ]; then
-            echo "::warning::搵唔到音效壓縮包，今次唔包含音效"
+            echo "::warning::搵唔到官方 APK，今次用佔位卡圖包"
             exit 0
           fi
-          curl -fL -o sound.zip "$URL"
-          rm -rf snd_tmp && mkdir snd_tmp
-          unzip -qo sound.zip -d snd_tmp
-          if [ -d snd_tmp/sound ]; then cp -r snd_tmp/sound/. mobile/assets/data/sound/; else cp -r snd_tmp/. mobile/assets/data/sound/; fi
-          rm -rf snd_tmp sound.zip
-          find mobile/assets/data/sound -type f | head -10
-          du -sh mobile/assets/data/sound
+          curl -fL -o official.apk "$URL" || { echo "::warning::下載官方 APK 失敗"; exit 0; }
+          ls -l official.apk
+          python3 - << 'PYEOF'
+          import zipfile, os, collections
+          z = zipfile.ZipFile('official.apk')
+          sizes = collections.Counter()
+          for i in z.infolist():
+              if i.filename.startswith('assets/data/'):
+                  parts = i.filename.split('/')
+                  sizes['/'.join(parts[:3])] += i.file_size
+          print('=== 官方 APK assets/data 各項大小（由大到細）===')
+          for k, v in sizes.most_common(30):
+              print(f'{v:>12,}  {k}')
+          names = z.namelist()
+          if 'assets/data/pics.zip' in names:
+              z.extract('assets/data/pics.zip', 'official_x')
+              os.replace('official_x/assets/data/pics.zip', 'mobile/assets/data/pics.zip')
+              print('已用官方 pics.zip 取代佔位檔:', os.path.getsize('mobile/assets/data/pics.zip'), 'bytes')
+          else:
+              print('::warning::官方 APK 冇 assets/data/pics.zip')
+          snd = [n for n in names if n.startswith('assets/data/sound/') and not n.endswith('/')]
+          for n in snd:
+              target = os.path.join('mobile', n.replace('assets/data/', 'assets/data/', 1))
+              os.makedirs(os.path.dirname(target), exist_ok=True)
+              with z.open(n) as src, open(target, 'wb') as dst:
+                  dst.write(src.read())
+          print('sound 檔案數（來自官方 APK）:', len(snd))
+          PYEOF
+          rm -rf official.apk official_x
+          du -sh mobile/assets/data/pics.zip mobile/assets/data/sound 2>/dev/null
+          exit 0
 
       - name: 繁中化卡庫與系統提示
         run: |
@@ -118,6 +145,14 @@ jobs:
               text = f.read()
 
           converted_conf = cc.convert(text)
+
+          # 完整性檢查：條目編號必須同原檔完全一致，並確認關鍵字串存在
+          ids = lambda t: re.findall(r'^!(\w+)\s+(\S+)', t, re.M)
+          before, after = ids(text), ids(converted_conf)
+          print('strings.conf 來源:', conf_src, '| 條目數 前/後 =', len(before), len(after))
+          assert before == after, '轉換後條目編號同原檔唔一致'
+          for kw_s, kw_t in [('显示场地背景', '顯示場地背景'), ('启用起源点数模式', '啟用起源點數模式')]:
+              print(f'原檔有「{kw_s}」:', kw_s in text, '| 轉換後有「{kw_t}」:'.replace('{kw_t}', kw_t), kw_t in converted_conf)
 
           os.makedirs('mobile/assets/data/conf', exist_ok=True)
           with open('mobile/assets/data/conf/strings.conf', 'w', encoding='utf-8') as f:
@@ -166,6 +201,29 @@ jobs:
               print('strings.xml 完成')
           PYEOF
 
+
+      - name: 修補 Constants.java（卡圖、場地圖來源；網上卡圖按輸入開關）
+        env:
+          NET_IMG: ${{ inputs.network_image }}
+        run: |
+          python3 - << 'PYEOF'
+          import re, os
+          p = 'mobile/src/main/java/cn/garymb/ygomobile/Constants.java'
+          s = open(p, encoding='utf-8').read()
+          s, n1 = re.subn(r'String IMAGE_URL = "[^"]*";',
+                          'String IMAGE_URL = "https://cdn.233.momobako.com/ygopro/pics/%s.jpg";', s)
+          s, n2 = re.subn(r'String IMAGE_FIELD_URL = "[^"]*";',
+                          'String IMAGE_FIELD_URL = "https://cdn.233.momobako.com/ygopro/pics/field/%s.jpg";', s)
+          assert (n1, n2) == (1, 1), 'IMAGE_URL / IMAGE_FIELD_URL 取代次數唔係 1/1'
+          if os.environ.get('NET_IMG') == 'true':
+              s, n3 = re.subn(r'boolean NETWORK_IMAGE = false;', 'boolean NETWORK_IMAGE = true;', s)
+              assert n3 == 1, 'NETWORK_IMAGE 取代次數唔係 1'
+              print('網上卡圖：已開啟')
+          else:
+              print('網上卡圖：保持關閉（使用內置 pics.zip）')
+          open(p, 'w', encoding='utf-8').write(s)
+          PYEOF
+          grep -n -E "String IMAGE_URL =|String IMAGE_FIELD_URL =|NETWORK_IMAGE =" mobile/src/main/java/cn/garymb/ygomobile/Constants.java
 
       - name: 配置 Java (JDK 17)
         uses: actions/setup-java@v4
