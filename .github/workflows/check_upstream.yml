@@ -25,12 +25,13 @@ jobs:
           python3 -c '
           import urllib.request, json, os
 
-          # 讀取 fallenstardust/YGOMobile-cn-ko-en 的 release-latest
+          token = os.environ.get("GH_TOKEN", "")
+          headers = {"User-Agent": "Mozilla/5.0"}
+          if token:
+              headers["Authorization"] = f"Bearer {token}"
+
           url = "https://api.github.com/repos/fallenstardust/YGOMobile-cn-ko-en/releases/tags/release-latest"
-          req = urllib.request.Request(url, headers={
-              "User-Agent": "Mozilla/5.0",
-              "Authorization": f"Bearer {os.environ.get(\"GH_TOKEN\", \"\")}"
-          })
+          req = urllib.request.Request(url, headers=headers)
           
           try:
               with urllib.request.urlopen(req, timeout=30) as resp:
@@ -38,6 +39,31 @@ jobs:
           except Exception as e:
               print(f"API 請求失敗: {e}")
               exit(0)
+
+          apk_asset = next((a for a in data.get("assets", []) if a["name"].lower().endswith(".apk")), None)
+          if not apk_asset:
+              print("官方 release-latest 內找不到 APK 附件")
+              exit(0)
+
+          current_sig = f"{apk_asset.get('updated_at')}_{apk_asset.get('size')}"
+          print(f"官方最新 APK 特徵: {current_sig}")
+
+          last_sig = ""
+          if os.path.exists("official_apk_version.txt"):
+              with open("official_apk_version.txt", "r", encoding="utf-8") as f:
+                  last_sig = f.read().strip()
+
+          print(f"本地上次記錄: {last_sig}")
+
+          if current_sig != last_sig:
+              print("發現官方有新版本發布！")
+              with open("official_apk_version.txt", "w", encoding="utf-8") as f:
+                  f.write(current_sig)
+              with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+                  out.write("has_new_version=true\n")
+          else:
+              print("官方版本無變更，略過編譯。")
+          '
 
           # 鎖定 YGOMobile.apk 附件
           apk_asset = next((a for a in data.get("assets", []) if a["name"].lower().endswith(".apk")), None)
