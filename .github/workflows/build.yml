@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write  # 加入此行賦予建立 Release 與 push 權限
+    env:
+      SUPERPRE_BASE: https://raw.githubusercontent.com/yi0332us/ygomobile-superpre-hk/main
     steps:
       - name: 檢出專案原始碼
         uses: actions/checkout@v4
@@ -164,72 +166,104 @@ jobs:
           du -sh mobile/assets/data/pics.zip mobile/assets/data/sound 2>/dev/null
           exit 0
 
-      - name: 動態修補 Constants.java (全域配置與繁中網址注入)
+      - name: 補齊官方 pics.zip 冇嘅卡圖（建置時下載，內置入 APK）
+        timeout-minutes: 30
         run: |
           python3 - << 'PYEOF'
-          import re, sys
+          import collections
+          import concurrent.futures as cf
+          import os
+          import sqlite3
+          import sys
+          import urllib.error
+          import urllib.request
+          import zipfile
 
-          file_path = "mobile/src/main/java/cn/garymb/ygomobile/Constants.java"
+          PICS = 'mobile/assets/data/pics.zip'
+          CDB = 'mobile/assets/data/cards.cdb'
+          URLS = [
+              os.environ.get('PIC_URL_1', 'https://cdn.233.momobako.com/ygopro/pics/{id}.jpg'),
+              os.environ.get('PIC_URL_2', 'https://images.ygoprodeck.com/images/cards/{id}.jpg'),
+          ]
+          MAX_N = int(os.environ.get('PIC_MAX', '8000'))
+          UA = {'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36'}
 
-          with open(file_path, "r", encoding="utf-8") as f:
-              content = f.read()
+          z = zipfile.ZipFile(PICS)
+          jpgs = [n for n in z.namelist() if n.lower().endswith('.jpg')]
+          z.close()
+          have = {os.path.basename(n)[:-4] for n in jpgs}
+          print('官方 pics.zip 現有卡圖張數:', len(have))
+          if len(have) < 1000:
+              print('::warning::官方卡圖包唔似正常（少過 1000 張），今次唔補圖，避免一次過下載全庫')
+              sys.exit(0)
+          prefix = collections.Counter(os.path.dirname(n) for n in jpgs).most_common(1)[0][0]
+          print('zip 內卡圖路徑前綴:', repr(prefix))
 
-          # 1. 開啟網路卡圖開關
-          content = re.sub(
-              r"boolean\s+NETWORK_IMAGE\s*=\s*false;",
-              "boolean NETWORK_IMAGE = true;",
-              content
-          )
+          conn = sqlite3.connect(CDB)
+          ids = [str(r[0]) for r in conn.execute(
+              "SELECT d.id FROM datas d JOIN texts t ON t.id = d.id "
+              "WHERE (d.type & 16384) = 0 AND t.name != ''")]
+          conn.close()
+          missing = sorted(set(ids) - have, key=int, reverse=True)
+          print(f'卡庫共 {len(ids)} 張（不含衍生物），缺卡圖 {len(missing)} 張')
+          if len(missing) > MAX_N:
+              print(f'::warning::缺圖超過上限 {MAX_N}，只補最新（編號最大）嘅 {MAX_N} 張')
+              missing = missing[:MAX_N]
 
-          # 2. 替換主卡圖 URL (Momobako 233 CDN)
-          content = re.sub(
-              r"String\s+IMAGE_URL\s*=\s*\"[^\"]*\";",
-              'String IMAGE_URL = "https://cdn.233.momobako.com/ygopro/pics/%s.jpg";',
-              content
-          )
 
-          # 3. 替換場地卡圖 URL (Momobako 233 CDN)
-          content = re.sub(
-              r"String\s+IMAGE_FIELD_URL\s*=\s*\"[^\"]*\";",
-              'String IMAGE_FIELD_URL = "https://cdn.233.momobako.com/ygopro/pics/field/%s.jpg";',
-              content
-          )
+          def fetch(cid):
+              for idx, fmt in enumerate(URLS):
+                  url = fmt.format(id=cid)
+                  for attempt in range(2):
+                      try:
+                          req = urllib.request.Request(url, headers=UA)
+                          with urllib.request.urlopen(req, timeout=20) as r:
+                              data = r.read()
+                          if len(data) > 2048 and data[:3] == b'\xff\xd8\xff':
+                              return cid, data, idx
+                          break  # 唔係 JPEG，試下一個來源
+                      except urllib.error.HTTPError as e:
+                          if e.code == 404:
+                              break
+                      except Exception:
+                          pass
+              return cid, None, None
 
-          # 4. 替換先行卡四條網址
-          content = re.sub(
-              r"String\s+URL_CN_DATAVER\s*=\s*\"[^\"]*\";",
-              'String URL_CN_DATAVER = "https://raw.githubusercontent.com/yi0332us/ygomobile-superpre-hk/main/version.txt";',
-              content
-          )
-          content = re.sub(
-              r"String\s+URL_PRE_CARD\s*=\s*\"[^\"]*\";",
-              'String URL_PRE_CARD = "https://raw.githubusercontent.com/yi0332us/ygomobile-superpre-hk/main/test-release.json";',
-              content
-          )
-          content = re.sub(
-              r"String\s+URL_SUPERPRE_CN_FILE\s*=\s*\"[^\"]*\";",
-              'String URL_SUPERPRE_CN_FILE = "https://raw.githubusercontent.com/yi0332us/ygomobile-superpre-hk/main/ygopro-super-pre.ypk";',
-              content
-          )
-          content = re.sub(
-              r"String\s+URL_SUPERPRE_CN_FILE_ALT\s*=\s*\"[^\"]*\";",
-              'String URL_SUPERPRE_CN_FILE_ALT = "https://raw.githubusercontent.com/yi0332us/ygomobile-superpre-hk/main/ygopro-super-pre.ypk";',
-              content
-          )
 
-          # 5. 替換檢查更新網址
-          content = re.sub(
-              r'String\s+URL_UPDATE[^\s]*\s*=\s*"[^"]*";',
-              'String URL_UPDATE = "https://raw.githubusercontent.com/yi0332us/YGOMobile-hk-ko-en/master/ver_code.json";',
-              content
-          )
+          name = lambda cid: (prefix + '/' if prefix else '') + cid + '.jpg'
+          added = [0] * len(URLS)
+          notfound = []
+          batch = []
 
-          with open(file_path, "w", encoding="utf-8") as f:
-              f.write(content)
 
-          print("Constants.java 動態修補完畢。")
+          def flush(batch):
+              if not batch:
+                  return
+              with zipfile.ZipFile(PICS, 'a', compression=zipfile.ZIP_STORED) as zf:
+                  for cid, data in batch:
+                      zf.writestr(name(cid), data)
+              batch.clear()
+
+
+          done = 0
+          with cf.ThreadPoolExecutor(max_workers=8) as ex:
+              for cid, data, idx in ex.map(fetch, missing):
+                  done += 1
+                  if data is None:
+                      notfound.append(cid)
+                  else:
+                      added[idx] += 1
+                      batch.append((cid, data))
+                      if len(batch) >= 300:
+                          flush(batch)
+                  if done % 500 == 0:
+                      print(f'進度 {done}/{len(missing)}')
+          flush(batch)
+          print(f'補圖完成：主來源 {added[0]} 張，後備來源 {added[1] if len(added) > 1 else 0} 張，兩邊都冇 {len(notfound)} 張')
+          if notfound:
+              print('仍然冇圖嘅卡號（最新 30 個）:', ', '.join(notfound[:30]))
+          print('pics.zip 最終大小:', os.path.getsize(PICS), 'bytes')
           PYEOF
-
 
       - name: 改介面文字（簡體中文→繁體中文；ICP 備案→繁體中文化 Powered by Claude & Gemini）
         run: |
@@ -356,28 +390,46 @@ jobs:
           PYEOF
 
 
-      - name: 修補 Constants.java（卡圖、場地圖來源；網上卡圖按輸入開關）
+      - name: 修補 Constants.java（卡圖、先行卡、更新網址；每項取代次數都驗證）
         env:
           NET_IMG: ${{ inputs.network_image }}
+          UPDATE_URL: https://raw.githubusercontent.com/${{ github.repository }}/${{ github.event.repository.default_branch }}/ver_code.json
         run: |
           python3 - << 'PYEOF'
-          import re, os
+          import os, re, subprocess
           p = 'mobile/src/main/java/cn/garymb/ygomobile/Constants.java'
           s = open(p, encoding='utf-8').read()
-          s, n1 = re.subn(r'String IMAGE_URL = "[^"]*";',
-                          'String IMAGE_URL = "https://cdn.233.momobako.com/ygopro/pics/%s.jpg";', s)
-          s, n2 = re.subn(r'String IMAGE_FIELD_URL = "[^"]*";',
-                          'String IMAGE_FIELD_URL = "https://cdn.233.momobako.com/ygopro/pics/field/%s.jpg";', s)
-          assert (n1, n2) == (1, 1), 'IMAGE_URL / IMAGE_FIELD_URL 取代次數唔係 1/1'
+          base = os.environ['SUPERPRE_BASE']
+          rules = [
+              ('IMAGE_URL', 'https://cdn.233.momobako.com/ygopro/pics/%s.jpg'),
+              ('IMAGE_FIELD_URL', 'https://cdn.233.momobako.com/ygopro/pics/field/%s.jpg'),
+              ('URL_CN_DATAVER', base + '/version.txt'),
+              ('URL_PRE_CARD', base + '/test-release.json'),
+              ('URL_SUPERPRE_CN_FILE', base + '/ygopro-super-pre.ypk'),
+              ('URL_SUPERPRE_CN_FILE_ALT', base + '/ygopro-super-pre.ypk'),
+          ]
+          for name, url in rules:
+              pat = r'String\s+' + name + r'\s*=\s*"[^"]*";'
+              s, n = re.subn(pat, lambda m: 'String ' + name + ' = "' + url + '";', s)
+              print(f'{name}: 取代 {n} 次')
+              assert n == 1, f'{name} 取代次數唔係 1（係 {n}），停止'
+          print('--- 同更新／版本檔有關嘅常數（供核對，唔會改）---')
+          for m in re.finditer(r'String\s+(URL_[A-Z0-9_]*)\s*=\s*"([^"]*(?:ver_code|update|version)[^"]*)";', s, re.I):
+              print(' ', m.group(1), '=', m.group(2))
+          s, n = re.subn(r'String\s+URL_UPDATE\s*=\s*"[^"]*";',
+                         lambda m: 'String URL_UPDATE = "' + os.environ['UPDATE_URL'] + '";', s)
+          print('URL_UPDATE: 取代', n, '次')
+          if n != 1:
+              print('::warning::搵唔到剛好一個 URL_UPDATE，自動更新網址未改，請睇上面清單')
           if os.environ.get('NET_IMG') == 'true':
-              s, n3 = re.subn(r'boolean NETWORK_IMAGE = false;', 'boolean NETWORK_IMAGE = true;', s)
+              s, n3 = re.subn(r'boolean\s+NETWORK_IMAGE\s*=\s*false;', 'boolean NETWORK_IMAGE = true;', s)
               assert n3 == 1, 'NETWORK_IMAGE 取代次數唔係 1'
-              print('網上卡圖：已開啟')
+              print('網上卡圖：已開啟（會逐張下載全卡庫）')
           else:
-              print('網上卡圖：保持關閉（使用內置 pics.zip）')
+              print('網上卡圖：保持關閉（卡圖已內置喺 pics.zip）')
           open(p, 'w', encoding='utf-8').write(s)
           PYEOF
-          grep -n -E "String IMAGE_URL =|String IMAGE_FIELD_URL =|NETWORK_IMAGE =" mobile/src/main/java/cn/garymb/ygomobile/Constants.java
+          grep -n -E "String (IMAGE_URL|IMAGE_FIELD_URL|URL_CN_DATAVER|URL_PRE_CARD|URL_SUPERPRE_CN_FILE|URL_SUPERPRE_CN_FILE_ALT|URL_UPDATE) =|NETWORK_IMAGE =" mobile/src/main/java/cn/garymb/ygomobile/Constants.java
 
       - name: 將易出 502 嘅 Aliyun google / gradle-plugin 鏡像換成官方源
         run: |
@@ -424,6 +476,16 @@ jobs:
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r29
+
+      - name: 還原固定簽名（ci/debug.keystore），令更新可以直接覆蓋安裝
+        run: |
+          if [ -f ci/debug.keystore ]; then
+            mkdir -p ~/.android
+            cp ci/debug.keystore ~/.android/debug.keystore
+            keytool -list -keystore ~/.android/debug.keystore -storepass android 2>/dev/null | head -4
+          else
+            echo "::warning::倉庫冇 ci/debug.keystore：每次 build 簽名都唔同，新版本將無法覆蓋安裝舊版（要先解除安裝）"
+          fi
 
       - name: Gradle 依賴快取
         uses: actions/cache@v4
@@ -474,48 +536,45 @@ jobs:
       - name: 發布繁中版 Release 並更新 ver_code.json
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          REPO: ${{ github.repository }}
         run: |
           set -e
-          # 1. 尋找編譯出來的 APK
           APK_PATH=$(find mobile/build/outputs/apk -iname "*.apk" | head -1)
-          if [ -z "$APK_PATH" ]; then
-            echo "::error::找不到編譯產出的 APK！"
-            exit 1
-          fi
+          [ -n "$APK_PATH" ] || { echo "::error::找不到編譯產出的 APK！"; exit 1; }
 
-          # 2. 取得版本號與當前日期產生 Tag
           VER_NAME=$(grep -hE "versionName" mobile/build.gradle build.gradle 2>/dev/null | grep -oE "[0-9]+\.[0-9]+(\.[0-9]+)?" | head -1)
           VER_CODE=$(grep -hE "versionCode" mobile/build.gradle build.gradle 2>/dev/null | grep -oE "[0-9]+" | head -1)
+          VER_NAME=${VER_NAME:-0.0.0}
+          VER_CODE=${VER_CODE:-1}
           TAG_NAME="v${VER_NAME}-$(date +%Y%m%d%H%M)"
-
           echo "發布版本: $TAG_NAME (versionCode: $VER_CODE)"
 
-          # 3. 發布 GitHub Release 並上傳 APK
           gh release create "$TAG_NAME" "$APK_PATH#YGOMobile-TC.apk" \
             --title "YGOMobile 繁體中文版 $VER_NAME" \
             --notes "自動同步官方最新版本與卡庫。"
 
-          APK_URL="https://github.com/${{ github.repository }}/releases/download/${TAG_NAME}/YGOMobile-TC.apk"
-
-          # 4. 生成供手機 App 檢查更新用的 ver_code.json
-          python3 - << PYEOF
-          import json
-
+          export APK_URL="https://github.com/${REPO}/releases/download/${TAG_NAME}/YGOMobile-TC.apk"
+          export VER_NAME VER_CODE
+          # 注意：ver_code.json 欄位格式係 Gemini 假設嘅，未對照 App 內嘅解析程式碼驗證
+          python3 - << 'PYEOF'
+          import json, os
           data = {
-              "versionCode": int("$VER_CODE"),
-              "versionName": "$VER_NAME",
-              "apkUrl": "$APK_URL",
-              "updateLog": "YGOMobile 繁體中文版自動更新\n已同步最新官方卡庫與先行卡。"
+              "versionCode": int(os.environ["VER_CODE"]),
+              "versionName": os.environ["VER_NAME"],
+              "apkUrl": os.environ["APK_URL"],
+              "updateLog": "YGOMobile 繁體中文版自動更新\n已同步最新官方卡庫與先行卡。",
           }
-
           with open("ver_code.json", "w", encoding="utf-8") as f:
               json.dump(data, f, ensure_ascii=False, indent=2)
           PYEOF
 
-          # 5. 推送 ver_code.json 回倉庫 main/master 分支
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add ver_code.json
           git commit -m "docs: 自動更新 ver_code.json 版本至 $TAG_NAME" || true
-          git push origin HEAD:master
-
+          git push origin HEAD:"$DEFAULT_BRANCH" || {
+            git fetch origin "$DEFAULT_BRANCH"
+            git rebase --autostash "origin/$DEFAULT_BRANCH"
+            git push origin HEAD:"$DEFAULT_BRANCH"
+          }
