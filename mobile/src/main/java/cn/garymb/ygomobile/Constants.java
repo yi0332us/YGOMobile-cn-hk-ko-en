@@ -212,7 +212,7 @@ public interface Constants {
     String ID2 = "[download_link]";
     String ID3 = "#pre_release_code";
     String URL_GENESYS_LFLIST_DOWNLOAD_LINK = "https://cdntx.moecube.com/ygopro-genesys/lflist.conf";
-    String URL_YGO233_ADVANCE = "http://127.0.0.1";
+    String URL_YGO233_ADVANCE = "https://ygo233.com/pre#pre_release_cards";
 
     // 官方超先行卡伺服器已關閉停運，改為本機地址以防 OkHttp HttpUrl.parse 回傳 null 導致 NPE 閃退
     String URL_CN_DATAVER = "http://127.0.0.1";
