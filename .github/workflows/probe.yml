@@ -10,56 +10,33 @@ jobs:
       - name: 檢出專案原始碼
         uses: actions/checkout@v4
 
-      - name: 測試場地卡圖網址（海 22702055、闇 59197169）
+      - name: 上游原版 Constants 嘅先行卡網址 + 測試狀態
         continue-on-error: true
         run: |
-          for id in 22702055 59197169; do
-            for u in \
-              "https://cdn.233.momobako.com/ygopro/pics/field/$id.jpg" \
-              "https://cdn.233.momobako.com/ygopro/pics/field/$id.png" \
-              "https://cdn.233.momobako.com/ygopro/field/$id.png" \
-              "https://cdn.233.momobako.com/ygopro/pics/$id.jpg"
-            do
-              curl -s -L -o /dev/null --max-time 20 \
-                -w "%{http_code} %{content_type} %{size_download}B  $u\n" "$u" || echo "000 連線失敗  $u"
-            done
+          git clone --depth 1 https://github.com/fallenstardust/YGOMobile-cn-ko-en.git /tmp/upstream
+          F=$(find /tmp/upstream -name Constants.java | head -1)
+          echo "檔案: $F"
+          echo "=== 原版先行卡相關常數 ==="
+          grep -n -E "YGO233_ADVANCE|CN_DATAVER|PRE_CARD|SUPERPRE|Super_Pre|ygopro-super-pre" "$F"
+          echo "=== 逐條測試（取前 200 bytes）==="
+          for u in $(grep -E "YGO233_ADVANCE|CN_DATAVER|PRE_CARD|SUPERPRE" "$F" | grep -oE 'https?://[^"]+' | sort -u); do
+            curl -s -L -o /dev/null -r 0-200 --max-time 25 \
+              -w "%{http_code} %{content_type} %{size_download}B  $u\n" "$u" || echo "000 連線失敗  $u"
           done
 
-      - name: 列出 assets 完整結構同大小
+      - name: 先行卡喺程式碼入面點樣被使用（你嘅 repo）
         continue-on-error: true
         run: |
-          echo "=== assets/data 一層（完整）==="
-          ls -la mobile/assets/data
-          echo "=== 各資料夾大小 ==="
-          du -sh mobile/assets/data/* 2>/dev/null
-          echo "=== git 內有冇音效檔 ==="
-          git ls-files | grep -i -E "sound|\.ogg$|\.mp3$|\.wav$" | head -30 || true
+          grep -rn -E "URL_CN_DATAVER|URL_PRE_CARD|URL_SUPERPRE_CN_FILE|URL_YGO233_ADVANCE|officialExCardPackageName" mobile/src/main/java | head -30
+          echo "=== 提示字串 ==="
+          grep -rn "未取得到先行卡\|未取得到先行卡资讯\|未取得到先行卡资讯" mobile/src/main | head -5
+          grep -rn "expansions" mobile/src/main/java | head -20
 
-      - name: 睇啟動複製資源同音效載入邏輯
+      - name: 語言切換相關程式碼（閃退調查）
         continue-on-error: true
         run: |
-          echo "=== ResCheckTask 全檔行數 ==="
-          wc -l mobile/src/main/java/cn/garymb/ygomobile/ui/home/ResCheckTask.java
-          echo "=== ResCheckTask 第 240-300 行 ==="
-          sed -n '240,300p' mobile/src/main/java/cn/garymb/ygomobile/ui/home/ResCheckTask.java
-          echo "=== getDatapath 定義 ==="
-          grep -n -A6 "getDatapath(" mobile/src/main/java/cn/garymb/ygomobile/ui/home/ResCheckTask.java | head -30
-          echo "=== MainActivity 第 200-225 行（NETWORK_IMAGE）==="
-          sed -n '200,225p' mobile/src/main/java/cn/garymb/ygomobile/ui/home/MainActivity.java
-          echo "=== ImageUpdater 第 330-380 行 ==="
-          sed -n '330,380p' mobile/src/main/java/cn/garymb/ygomobile/ui/home/ImageUpdater.java
-
-      - name: 列出上游 YGOMobile release 附件（搵音效包）
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          curl -s -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/fallenstardust/YGOMobile-cn-ko-en/releases?per_page=15" | python3 -c "
-          import sys, json
-          d = json.load(sys.stdin)
-          if isinstance(d, list):
-              for r in d:
-                  print(r['tag_name'], [(a['name'], a['size']) for a in r.get('assets', [])][:12])
-          else:
-              print(d)
-          "
+          grep -rn -i -E "data_lang|datalang|DataLanguage|PREF_.*LANG|switchLang|changeLang" mobile/src/main/java | head -40
+          echo "=== 語言按鈕字串／資源 ==="
+          grep -rn -E "简体中文|簡體中文|한국어|조선말" mobile/src/main --include=*.xml --include=*.java | head -20
+          echo "=== ICP 字串位置 ==="
+          grep -rn "ICP" mobile/src/main --include=*.xml --include=*.java | head -10
