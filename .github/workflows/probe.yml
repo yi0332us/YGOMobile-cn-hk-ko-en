@@ -10,54 +10,56 @@ jobs:
       - name: 檢出專案原始碼
         uses: actions/checkout@v4
 
-      - name: 測試候選卡圖網址（黑魔導 46986414）
+      - name: 測試場地卡圖網址（海 22702055、闇 59197169）
         continue-on-error: true
         run: |
-          for u in \
-            "https://github.com/fallenstardust/YGOMobile-pics/master/pics/46986414.jpg" \
-            "https://github.com/fallenstardust/YGOMobile-pics/raw/master/pics/46986414.jpg" \
-            "https://raw.githubusercontent.com/fallenstardust/YGOMobile-pics/master/pics/46986414.jpg" \
-            "https://cdn.233.momobako.com/ygopro/pics/46986414.jpg" \
-            "https://cdn.01101001.xyz/images/cards/46986414.jpg"
-          do
-            curl -s -L -o /dev/null --max-time 20 \
-              -w "%{http_code} %{content_type} %{size_download}B  $u\n" "$u" || echo "000 連線失敗  $u"
+          for id in 22702055 59197169; do
+            for u in \
+              "https://cdn.233.momobako.com/ygopro/pics/field/$id.jpg" \
+              "https://cdn.233.momobako.com/ygopro/pics/field/$id.png" \
+              "https://cdn.233.momobako.com/ygopro/field/$id.png" \
+              "https://cdn.233.momobako.com/ygopro/pics/$id.jpg"
+            do
+              curl -s -L -o /dev/null --max-time 20 \
+                -w "%{http_code} %{content_type} %{size_download}B  $u\n" "$u" || echo "000 連線失敗  $u"
+            done
           done
 
-      - name: 列出圖片倉庫同音效 release 內容
+      - name: 列出 assets 完整結構同大小
+        continue-on-error: true
+        run: |
+          echo "=== assets/data 一層（完整）==="
+          ls -la mobile/assets/data
+          echo "=== 各資料夾大小 ==="
+          du -sh mobile/assets/data/* 2>/dev/null
+          echo "=== git 內有冇音效檔 ==="
+          git ls-files | grep -i -E "sound|\.ogg$|\.mp3$|\.wav$" | head -30 || true
+
+      - name: 睇啟動複製資源同音效載入邏輯
+        continue-on-error: true
+        run: |
+          echo "=== ResCheckTask 全檔行數 ==="
+          wc -l mobile/src/main/java/cn/garymb/ygomobile/ui/home/ResCheckTask.java
+          echo "=== ResCheckTask 第 240-300 行 ==="
+          sed -n '240,300p' mobile/src/main/java/cn/garymb/ygomobile/ui/home/ResCheckTask.java
+          echo "=== getDatapath 定義 ==="
+          grep -n -A6 "getDatapath(" mobile/src/main/java/cn/garymb/ygomobile/ui/home/ResCheckTask.java | head -30
+          echo "=== MainActivity 第 200-225 行（NETWORK_IMAGE）==="
+          sed -n '200,225p' mobile/src/main/java/cn/garymb/ygomobile/ui/home/MainActivity.java
+          echo "=== ImageUpdater 第 330-380 行 ==="
+          sed -n '330,380p' mobile/src/main/java/cn/garymb/ygomobile/ui/home/ImageUpdater.java
+
+      - name: 列出上游 YGOMobile release 附件（搵音效包）
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "=== YGOMobile-pics 倉庫 ==="
-          curl -s -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/fallenstardust/YGOMobile-pics | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('full_name') or d.get('message'), '| default_branch=', d.get('default_branch'), '| size(KB)=', d.get('size'))"
-          echo "=== YGOMobile-pics releases ==="
-          curl -s -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/fallenstardust/YGOMobile-pics/releases?per_page=10" | python3 -c "
+          curl -s -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/fallenstardust/YGOMobile-cn-ko-en/releases?per_page=15" | python3 -c "
           import sys, json
           d = json.load(sys.stdin)
           if isinstance(d, list):
               for r in d:
-                  print(r['tag_name'], [(a['name'], a['size']) for a in r.get('assets', [])][:10])
+                  print(r['tag_name'], [(a['name'], a['size']) for a in r.get('assets', [])][:12])
           else:
               print(d)
           "
-          echo "=== YGOMobile-cn-ko-en tag=sounds 附件 ==="
-          curl -s -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/fallenstardust/YGOMobile-cn-ko-en/releases/tags/sounds | python3 -c "
-          import sys, json
-          d = json.load(sys.stdin)
-          print([(a['name'], a['size']) for a in d.get('assets', [])] or d.get('message'))
-          "
-
-      - name: 搵程式碼點用卡圖同音效
-        continue-on-error: true
-        run: |
-          echo "=== NETWORK_IMAGE 用法 ==="
-          grep -rn "NETWORK_IMAGE" mobile/src/main/java | head -20
-          echo "=== IMAGE_URL / IMAGE_FIELD_URL 用法 ==="
-          grep -rn -E "IMAGE_URL|IMAGE_FIELD_URL" mobile/src/main/java | grep -v "Constants.java" | head -20
-          echo "=== 音效路徑 CORE_SOUND_PATH 用法 ==="
-          grep -rn "CORE_SOUND_PATH" mobile/src/main/java | head -20
-          echo "=== assets/data 結構 ==="
-          find mobile/assets/data -maxdepth 2 | head -40
-          echo "=== 啟動時點樣由 assets 複製去遊戲目錄 ==="
-          grep -rn -E "copyAssets|\"data\"|assets/data|getAssets\(\)" mobile/src/main/java | head -20
