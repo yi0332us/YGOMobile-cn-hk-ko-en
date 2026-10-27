@@ -1,344 +1,42 @@
-name: Build YGOMobile TC
+name: Probe YGOMobile resources
 
 on:
   workflow_dispatch:
-    inputs:
-      network_image:
-        description: '開啟網上卡圖下載（會逐張下載全卡庫，預設唔開）'
-        type: boolean
-        default: false
 
 jobs:
-  build:
+  probe:
     runs-on: ubuntu-24.04
     steps:
       - name: 檢出專案原始碼
         uses: actions/checkout@v4
 
-      - name: 配置 Python 環境
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-
-      - name: 安裝 OpenCC
-        run: pip install opencc
-
-      - name: 下載 libWindbot.aar（並驗證係真 AAR）
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: 上游原版 Constants 嘅先行卡網址 + 測試狀態
+        continue-on-error: true
         run: |
-          set -e
-          mkdir -p mobile/libs
-          # 喺 mercury233/libWindbot 嘅 releases 入面搵第一個 .aar 附件
-          URL=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
-            "https://api.github.com/repos/mercury233/libWindbot/releases?per_page=30" \
-            | python3 -c "
-          import sys, json
-          for rel in json.load(sys.stdin):
-              for a in rel.get('assets', []):
-                  if a['name'].lower().endswith('.aar'):
-                      print(a['browser_download_url']); sys.exit(0)
-          ")
-          echo "AAR URL = $URL"
-          if [ -z "$URL" ]; then
-            echo "::error::搵唔到任何 .aar 附件，請手動上載 libWindbot.aar 到 mobile/libs/"
-            exit 1
-          fi
-          curl -fL -o mobile/libs/libWindbot.aar "$URL"
-          ls -l mobile/libs/libWindbot.aar
-          # 驗證：真 AAR 一定有 AndroidManifest.xml
-          unzip -l mobile/libs/libWindbot.aar | grep -q AndroidManifest.xml \
-            || { echo "::error::下載咗嘅唔係有效 AAR"; exit 1; }
-
-      - name: 下載卡庫、字型、腳本
-        run: |
-          set -e
-          mkdir -p mobile/assets/data/fonts
-          zip -q mobile/assets/data/pics.zip .gitignore
-          curl -fL -o mobile/assets/data/cards.cdb https://github.com/mycard/ygopro-database/raw/master/locales/zh-CN/cards.cdb
-          curl -fL -o mobile/assets/data/fonts/ygo.ttf https://github.com/fallenstardust/YGOMobile-cn-ko-en/releases/download/sounds/ygo.ttf
-          curl -fL -o scripts_master.zip https://github.com/mycard/ygopro-scripts/archive/refs/heads/master.zip
-          unzip -q scripts_master.zip
-          mv ygopro-scripts-master script
-          zip -rq mobile/assets/data/scripts.zip script
-          rm -rf script scripts_master.zip
-
-      - name: 由官方 APK 攞卡圖包（pics.zip）同音效／音樂
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set +e
-          # 1) 由專案自己嘅 versionName 砌 files.ygom.top 直連（版本同我哋原始碼一致）
-          VER=$(grep -hE "versionName" mobile/build.gradle build.gradle 2>/dev/null \
-                | grep -oE "[0-9]+\.[0-9]+(\.[0-9]+)?" | head -1)
-          echo "專案 versionName = [$VER]"
-          CANDS=()
-          [ -n "$VER" ] && CANDS+=("https://files.ygom.top/files/YGOMobile_${VER}.Apk")
-          # 2) 官方版本檔 ver_code.json（App 自己都讀呢個），印出內容方便除錯
-          curl -fsSL --max-time 30 https://ygom.top/ver_code.json -o /tmp/ver.json && {
-            echo "=== ver_code.json ==="; head -c 600 /tmp/ver.json; echo
-            for u in $(grep -oiE "https?://[^\"' ]+\.apk" /tmp/ver.json); do CANDS+=("$u"); done
-            V2=$(grep -oE "[0-9]+\.[0-9]+\.[0-9]+" /tmp/ver.json | head -1)
-            [ -n "$V2" ] && CANDS+=("https://files.ygom.top/files/YGOMobile_${V2}.Apk")
-          }
-          # 3) 後備：GitHub release-latest 嘅 APK
-          GH_URL=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
-            "https://api.github.com/repos/fallenstardust/YGOMobile-cn-ko-en/releases/tags/release-latest" \
-            | python3 -c "
-          import sys, json
-          d = json.load(sys.stdin)
-          for a in d.get('assets', []):
-              if a['name'].lower().endswith('.apk'):
-                  print(a['browser_download_url']); break
-          ")
-          [ -n "$GH_URL" ] && CANDS+=("$GH_URL")
-          printf '候選來源:\n'; printf '  %s\n' "${CANDS[@]}"
-          URL=""
-          for u in "${CANDS[@]}"; do
-            echo ">>> 嘗試 $u"
-            rm -f official.apk
-            curl -fL --max-time 900 -o official.apk "$u" || continue
-            SZ=$(stat -c %s official.apk)
-            if [ "$SZ" -gt 50000000 ] && python3 -c "import zipfile,sys; sys.exit(0 if zipfile.is_zipfile('official.apk') else 1)"; then
-              URL="$u"; break
-            fi
-            echo "    大細 $SZ，唔似有效 APK，換下一個"
+          git clone --depth 1 https://github.com/fallenstardust/YGOMobile-cn-ko-en.git /tmp/upstream
+          F=$(find /tmp/upstream -name Constants.java | head -1)
+          echo "檔案: $F"
+          echo "=== 原版先行卡相關常數 ==="
+          grep -n -E "YGO233_ADVANCE|CN_DATAVER|PRE_CARD|SUPERPRE|Super_Pre|ygopro-super-pre" "$F"
+          echo "=== 逐條測試（取前 200 bytes）==="
+          for u in $(grep -E "YGO233_ADVANCE|CN_DATAVER|PRE_CARD|SUPERPRE" "$F" | grep -oE 'https?://[^"]+' | sort -u); do
+            curl -s -L -o /dev/null -r 0-200 --max-time 25 \
+              -w "%{http_code} %{content_type} %{size_download}B  $u\n" "$u" || echo "000 連線失敗  $u"
           done
-          echo "官方 APK = $URL"
-          if [ -z "$URL" ]; then
-            echo "::warning::所有來源都下載唔到官方 APK，今次用佔位卡圖包"
-            exit 0
-          fi
-          ls -l official.apk
-          python3 - << 'PYEOF'
-          import zipfile, os, collections
-          z = zipfile.ZipFile('official.apk')
-          sizes = collections.Counter()
-          for i in z.infolist():
-              if i.filename.startswith('assets/data/'):
-                  parts = i.filename.split('/')
-                  sizes['/'.join(parts[:3])] += i.file_size
-          print('=== 官方 APK assets/data 各項大小（由大到細）===')
-          for k, v in sizes.most_common(30):
-              print(f'{v:>12,}  {k}')
-          names = z.namelist()
-          if 'assets/data/pics.zip' in names:
-              z.extract('assets/data/pics.zip', 'official_x')
-              os.replace('official_x/assets/data/pics.zip', 'mobile/assets/data/pics.zip')
-              print('已用官方 pics.zip 取代佔位檔:', os.path.getsize('mobile/assets/data/pics.zip'), 'bytes')
-          else:
-              print('::warning::官方 APK 冇 assets/data/pics.zip')
-          snd = [n for n in names if n.startswith('assets/data/sound/') and not n.endswith('/')]
-          for n in snd:
-              target = os.path.join('mobile', n.replace('assets/data/', 'assets/data/', 1))
-              os.makedirs(os.path.dirname(target), exist_ok=True)
-              with z.open(n) as src, open(target, 'wb') as dst:
-                  dst.write(src.read())
-          print('sound 檔案數（來自官方 APK）:', len(snd))
-          PYEOF
-          rm -rf official.apk official_x
-          du -sh mobile/assets/data/pics.zip mobile/assets/data/sound 2>/dev/null
-          exit 0
 
-      - name: 繁中化卡庫與系統提示
+      - name: 先行卡喺程式碼入面點樣被使用（你嘅 repo）
+        continue-on-error: true
         run: |
-          python - << 'PYEOF'
-          import os, re, sqlite3, opencc
-          import xml.etree.ElementTree as ET
+          grep -rn -E "URL_CN_DATAVER|URL_PRE_CARD|URL_SUPERPRE_CN_FILE|URL_YGO233_ADVANCE|officialExCardPackageName" mobile/src/main/java | head -30
+          echo "=== 提示字串 ==="
+          grep -rn "未取得到先行卡\|未取得到先行卡资讯\|未取得到先行卡资讯" mobile/src/main | head -5
+          grep -rn "expansions" mobile/src/main/java | head -20
 
-          cc = opencc.OpenCC('s2twp.json')
-
-          # 1. 繁中化 cards.cdb
-          cdb_path = 'mobile/assets/data/cards.cdb'
-          conn = sqlite3.connect(cdb_path)
-          c = conn.cursor()
-          cols = ['name', 'desc'] + [f'str{i}' for i in range(1, 17)]
-          c.execute(f"SELECT id, {', '.join(cols)} FROM texts")
-          rows = c.fetchall()
-          updated = [tuple(cc.convert(v) if v else '' for v in r[1:]) + (r[0],) for r in rows]
-          c.executemany(
-              f"UPDATE texts SET {', '.join(k + '=?' for k in cols)} WHERE id=?", updated)
-          conn.commit()
-          conn.close()
-          print('cards.cdb 完成', len(rows))
-
-          # 2. 繁中化本專案內建手機版 strings.conf 並同步輸出雙路徑
-          conf_src = 'mobile/assets/data/conf/strings.conf'
-          if not os.path.exists(conf_src):
-              conf_src = 'mobile/assets/data/strings.conf'
-
-          with open(conf_src, 'r', encoding='utf-8') as f:
-              text = f.read()
-
-          converted_conf = cc.convert(text)
-
-          # 完整性檢查：條目編號必須同原檔完全一致，並確認關鍵字串存在
-          ids = lambda t: re.findall(r'^!(\w+)\s+(\S+)', t, re.M)
-          before, after = ids(text), ids(converted_conf)
-          print('strings.conf 來源:', conf_src, '| 條目數 前/後 =', len(before), len(after))
-          assert before == after, '轉換後條目編號同原檔唔一致'
-          for kw_s, kw_t in [('显示场地背景', '顯示場地背景'), ('启用起源点数模式', '啟用起源點數模式')]:
-              print(f'原檔有「{kw_s}」:', kw_s in text, '| 轉換後有「{kw_t}」:'.replace('{kw_t}', kw_t), kw_t in converted_conf)
-
-          os.makedirs('mobile/assets/data/conf', exist_ok=True)
-          with open('mobile/assets/data/conf/strings.conf', 'w', encoding='utf-8') as f:
-              f.write(converted_conf)
-          with open('mobile/assets/data/strings.conf', 'w', encoding='utf-8') as f:
-              f.write(converted_conf)
-          print('strings.conf 繁中化完成（已鏡像至 data/ 及 data/conf/）')
-
-          # 3. 繁中化伺服器清單 serverlist.xml
-          for s_path in ['mobile/src/main/assets/serverlist.xml', 'mobile/assets/serverlist.xml', 'mobile/src/main/assets/server_list.xml']:
-              if os.path.exists(s_path):
-                  with open(s_path, 'r', encoding='utf-8') as f:
-                      s_text = f.read()
-                  converted_s = cc.convert(s_text)
-                  ET.fromstring(converted_s.encode('utf-8'))
-                  with open(s_path, 'w', encoding='utf-8') as f:
-                    f.write(converted_s)
-                  print(f'{s_path} 伺服器列表完成')
-
-          # 4. 繁中化說明文檔（嚴格 UTF-8；解碼失敗或冇變化就唔郁，避免弄壞檔案）
-          for root, dirs, files in os.walk('mobile'):
-              if 'assets' in root and 'build' not in root and '/sound' not in root:
-                  for file in files:
-                      if file.endswith(('.txt', '.html', '.md', '.json')) and not file.endswith(('output-metadata.json', 'version.txt')):
-                          fpath = os.path.join(root, file)
-                          try:
-                              with open(fpath, 'r', encoding='utf-8') as f:
-                                  content = f.read()
-                              conv = cc.convert(content)
-                              if conv != content:
-                                  with open(fpath, 'w', encoding='utf-8') as f:
-                                      f.write(conv)
-                                  print(f'文本資源完成: {fpath}')
-                          except UnicodeDecodeError:
-                              print(f'跳過（非 UTF-8）: {fpath}')
-
-          # 5. 繁中化 strings.xml
-          xml_path = 'mobile/src/main/res/values/strings.xml'
-          if os.path.exists(xml_path):
-              with open(xml_path, 'r', encoding='utf-8') as f:
-                  text = f.read()
-              out = re.sub(r'>([^<]+)<', lambda m: '>' + cc.convert(m.group(1)) + '<', text)
-              ET.fromstring(out.encode('utf-8'))
-              with open(xml_path, 'w', encoding='utf-8') as f:
-                  f.write(out)
-              print('strings.xml 完成')
-          PYEOF
-
-
-      - name: 修補 Constants.java（卡圖、場地圖來源；網上卡圖按輸入開關）
-        env:
-          NET_IMG: ${{ inputs.network_image }}
+      - name: 語言切換相關程式碼（閃退調查）
+        continue-on-error: true
         run: |
-          python3 - << 'PYEOF'
-          import re, os
-          p = 'mobile/src/main/java/cn/garymb/ygomobile/Constants.java'
-          s = open(p, encoding='utf-8').read()
-          s, n1 = re.subn(r'String IMAGE_URL = "[^"]*";',
-                          'String IMAGE_URL = "https://cdn.233.momobako.com/ygopro/pics/%s.jpg";', s)
-          s, n2 = re.subn(r'String IMAGE_FIELD_URL = "[^"]*";',
-                          'String IMAGE_FIELD_URL = "https://cdn.233.momobako.com/ygopro/pics/field/%s.jpg";', s)
-          assert (n1, n2) == (1, 1), 'IMAGE_URL / IMAGE_FIELD_URL 取代次數唔係 1/1'
-          if os.environ.get('NET_IMG') == 'true':
-              s, n3 = re.subn(r'boolean NETWORK_IMAGE = false;', 'boolean NETWORK_IMAGE = true;', s)
-              assert n3 == 1, 'NETWORK_IMAGE 取代次數唔係 1'
-              print('網上卡圖：已開啟')
-          else:
-              print('網上卡圖：保持關閉（使用內置 pics.zip）')
-          open(p, 'w', encoding='utf-8').write(s)
-          PYEOF
-          grep -n -E "String IMAGE_URL =|String IMAGE_FIELD_URL =|NETWORK_IMAGE =" mobile/src/main/java/cn/garymb/ygomobile/Constants.java
-
-      - name: 將易出 502 嘅 Aliyun google / gradle-plugin 鏡像換成官方源
-        run: |
-          python3 - << 'PYEOF'
-          import os, re
-          rules = [
-              (re.compile(r'https?://maven\.aliyun\.com/(?:repository|nexus/content/(?:groups|repositories))/google/?'),
-               'https://dl.google.com/dl/android/maven2/'),
-              (re.compile(r'https?://maven\.aliyun\.com/(?:repository|nexus/content/(?:groups|repositories))/gradle-plugin/?'),
-               'https://plugins.gradle.org/m2/'),
-          ]
-          total = 0
-          for root, dirs, files in os.walk('.'):
-              dirs[:] = [d for d in dirs if d not in ('.git', 'build', '.gradle', 'node_modules')]
-              for f in files:
-                  if not (f.endswith('.gradle') or f.endswith('.gradle.kts') or f.endswith('.kts') or f == 'gradle.properties'):
-                      continue
-                  p = os.path.join(root, f)
-                  try:
-                      t = open(p, encoding='utf-8').read()
-                  except UnicodeDecodeError:
-                      continue
-                  n = t
-                  cnt = 0
-                  for rx, rep in rules:
-                      n, c = rx.subn(rep, n)
-                      cnt += c
-                  if cnt:
-                      open(p, 'w', encoding='utf-8').write(n)
-                      total += cnt
-                      print(f'{p}: 取代 {cnt} 處')
-          print('合共取代', total, '處')
-          PYEOF
-          echo "=== 仲剩低嘅其他鏡像（保持不變）==="
-          grep -rn --include=*.gradle --include=*.kts --include=gradle.properties -E "aliyun|huaweicloud|tencent" . 2>/dev/null | grep -v "/build/" | head -20 || true
-
-      - name: 配置 Java (JDK 17)
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-
-      - name: 配置 Android NDK (r29)
-        uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r29
-
-      - name: Gradle 依賴快取
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle', '**/*.gradle.kts', '**/gradle-wrapper.properties') }}
-          restore-keys: |
-            gradle-${{ runner.os }}-
-
-      - name: 編譯遊戲 C++ 核心
-        run: |
-          chmod +x gradlew
-          for i in 1 2 3; do
-            echo "=== buildYgoCore 第 $i 次嘗試 ==="
-            ./gradlew :libcore:buildYgoCore -Dorg.gradle.internal.http.connectionTimeout=120000 -Dorg.gradle.internal.http.socketTimeout=120000 && exit 0
-            sleep 20
-          done
-          exit 1
-
-      - name: 打包 APK（只打 cn 版 debug）
-        run: |
-          for i in 1 2 3; do
-            echo "=== assembleCnDebug 第 $i 次嘗試 ==="
-            ./gradlew :mobile:assembleCnDebug --stacktrace -Dorg.gradle.jvmargs="-Xmx4096m" -Dorg.gradle.internal.http.connectionTimeout=120000 -Dorg.gradle.internal.http.socketTimeout=120000 && exit 0
-            sleep 20
-          done
-          exit 1
-
-      - name: 收集 APK（副檔名係 .Apk，要唔分大細楷）
-        run: |
-          mkdir -p dist
-          find mobile/build/outputs/apk -type f -iname "*.apk" | while read -r f; do
-            base=$(basename "${f%.*}")
-            cp -v "$f" "dist/${base}.apk"
-          done
-          ls -lh dist/
-          ls dist/*.apk > /dev/null 2>&1 || { echo "::error::搵唔到 APK"; exit 1; }
-
-      - name: 上載 APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: YGOMobile-TC
-          path: dist/*.apk
-          if-no-files-found: error
+          grep -rn -i -E "data_lang|datalang|DataLanguage|PREF_.*LANG|switchLang|changeLang" mobile/src/main/java | head -40
+          echo "=== 語言按鈕字串／資源 ==="
+          grep -rn -E "简体中文|簡體中文|한국어|조선말" mobile/src/main --include=*.xml --include=*.java | head -20
+          echo "=== ICP 字串位置 ==="
+          grep -rn "ICP" mobile/src/main --include=*.xml --include=*.java | head -10
