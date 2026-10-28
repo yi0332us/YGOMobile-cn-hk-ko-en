@@ -1,8 +1,6 @@
 {
-  "versionname": "3.13.8",
-  "update_time": "2026年10月",
-  "download_link": [
-    "https://github.com/yi0332us/YGOMobile-hk-ko-en/releases/download/v3.13.8-202610270747/YGOMobile-TC.apk"
-  ],
-  "pre_release_code": {}
+  "versionCode": 312013015,
+  "versionName": "3.13.8",
+  "apkUrl": "https://github.com/yi0332us/YGOMobile-hk-ko-en/releases/download/v3.13.8-202610282159/YGOMobile-TC.apk",
+  "updateLog": "YGOMobile 繁體中文版自動更新\n已同步最新官方卡庫與先行卡。"
 }
