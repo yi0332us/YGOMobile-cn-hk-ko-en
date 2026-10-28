@@ -147,7 +147,10 @@ jobs:
 
           # 3. 通用補齊：repo 入面冇嘅 assets 檔（BGM、其他語言資料等）一律由官方補上；已存在嘅唔覆蓋
           added = []
+          SKIP = ('assets/assemblies/', 'assets/dexopt/')   # 官方 Xamarin 組件／baseline profile 同我哋嘅 libWindbot.aar 版本未必一致，唔補入
           for n in names:
+              if n.startswith(SKIP):
+                  continue
               target = os.path.join('mobile', n)
               if os.path.exists(target):
                   continue
@@ -262,6 +265,52 @@ jobs:
           print(f'補圖完成：主來源 {added[0]} 張，後備來源 {added[1] if len(added) > 1 else 0} 張，兩邊都冇 {len(notfound)} 張')
           if notfound:
               print('仍然冇圖嘅卡號（最新 30 個）:', ', '.join(notfound[:30]))
+          # ---- 用先行包（ypk）入面同名卡嘅臨時編號卡圖，頂替 CDN 都冇嘅正式編號卡圖 ----
+          if notfound:
+              try:
+                  import subprocess
+                  import opencc
+                  base = os.environ.get('SUPERPRE_BASE', '')
+                  if not base:
+                      raise RuntimeError('冇 SUPERPRE_BASE')
+                  subprocess.run(['curl', '-sSfL', '--retry', '3', '--max-time', '180',
+                                  '-o', '/tmp/superpre.ypk', base + '/ygopro-super-pre.ypk'], check=True)
+                  zy = zipfile.ZipFile('/tmp/superpre.ypk')
+                  try:
+                      cc = opencc.OpenCC('s2twp.json')
+                  except Exception:
+                      cc = opencc.OpenCC('s2twp')
+                  temp_by_name = collections.defaultdict(list)
+                  for zn in zy.namelist():
+                      if zn.lower().endswith('.cdb'):
+                          open('/tmp/_x.cdb', 'wb').write(zy.read(zn))
+                          cx = sqlite3.connect('/tmp/_x.cdb')
+                          for i2, nm in cx.execute("SELECT id, name FROM texts WHERE name != ''"):
+                              temp_by_name[nm].append(str(i2))
+                          cx.close()
+                  ypk_pics = {os.path.basename(zn)[:-4]: zn for zn in zy.namelist() if zn.lower().endswith('.jpg')}
+                  cm = sqlite3.connect(CDB)
+                  main_names = {str(i2): nm for i2, nm in cm.execute("SELECT id, name FROM texts")}
+                  cm.close()
+                  aliased, still = [], []
+                  for cid in notfound:
+                      nm = cc.convert(main_names.get(cid, ''))
+                      hit = next((t for t in temp_by_name.get(nm, []) if t != cid and t in ypk_pics), None)
+                      if hit:
+                          aliased.append((cid, zy.read(ypk_pics[hit]), hit))
+                      else:
+                          still.append(cid)
+                  if aliased:
+                      with zipfile.ZipFile(PICS, 'a', compression=zipfile.ZIP_STORED) as zf:
+                          for cid, data, t in aliased:
+                              zf.writestr(name(cid), data)
+                  for cid, _, t in aliased:
+                      print(f'  先行包臨時編號 {t} 嘅圖 -> 頂替正式編號 {cid}')
+                  print(f'先行包同名卡頂替完成：{len(aliased)} 張；仍然冇圖 {len(still)} 張')
+                  if still:
+                      print('最終冇圖嘅卡號:', ', '.join(still))
+              except Exception as e:
+                  print(f'::warning::先行包頂替步驟失敗（唔影響建置）: {e}')
           print('pics.zip 最終大小:', os.path.getsize(PICS), 'bytes')
           PYEOF
 
@@ -556,26 +605,18 @@ jobs:
 
           export APK_URL="https://github.com/${REPO}/releases/download/${TAG_NAME}/YGOMobile-TC.apk"
           export VER_NAME VER_CODE
-          # 已對齊官方真實 ver_code.json 格式 (versionname 全小寫、download_link 陣列)
+          # 注意：ver_code.json 欄位格式係 Gemini 假設嘅，未對照 App 內嘅解析程式碼驗證
           python3 - << 'PYEOF'
-          import json, os, datetime
-
-          now = datetime.datetime.now()
-          update_time_str = f"{now.year}年{now.month}月"
-
+          import json, os
           data = {
-              "versionname": os.environ["VER_NAME"],
-              "update_time": update_time_str,
-              "download_link": [
-                  os.environ["APK_URL"]
-              ],
-              "pre_release_code": {}
+              "versionCode": int(os.environ["VER_CODE"]),
+              "versionName": os.environ["VER_NAME"],
+              "apkUrl": os.environ["APK_URL"],
+              "updateLog": "YGOMobile 繁體中文版自動更新\n已同步最新官方卡庫與先行卡。",
           }
-
           with open("ver_code.json", "w", encoding="utf-8") as f:
               json.dump(data, f, ensure_ascii=False, indent=2)
           PYEOF
-
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
